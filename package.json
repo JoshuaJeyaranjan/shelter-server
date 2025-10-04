@@ -16,6 +16,7 @@
     "express": "^5.1.0",
     "morgan": "^1.10.1",
     "node-cron": "^4.2.1",
+    "node-geocoder": "^4.4.1",
     "pg": "^8.16.3",
     "render": "^0.1.4"
   }
