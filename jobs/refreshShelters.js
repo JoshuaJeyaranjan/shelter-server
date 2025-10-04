@@ -5,6 +5,7 @@ const { Pool } = require("pg");
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false },
 });
 
 async function runJob() {
@@ -21,6 +22,7 @@ async function runJob() {
   }
 }
 
+// Run once immediately (optional)
 runJob();
 
 // Schedule to run daily at 3 AM
