@@ -1,9 +1,10 @@
+// seedSheltersFromApi.js
 require("dotenv").config();
 const axios = require("axios");
 const pool = require("./config/db");
 
 const PACKAGE_ID = "21c83b32-d5a8-4106-a54f-010dbe49f6f2";
-const BATCH_SIZE = 500; // or whatever is comfortable
+const BATCH_SIZE = 500;
 
 // Normalize each record
 function normalizeRecord(r) {
@@ -68,7 +69,6 @@ async function fetchAllRecords(resourceId) {
 async function insertBatch(client, batch) {
   if (!batch.length) return;
 
-  // Deduplicate by shelter_id — keep last occurrence
   const uniqueBatch = Object.values(
     batch.reduce((acc, r) => {
       acc[r.shelter_id] = r;
@@ -108,7 +108,7 @@ async function insertBatch(client, batch) {
       unoccupied_rooms = EXCLUDED.unoccupied_rooms,
       occupancy_date = EXCLUDED.occupancy_date,
       latitude = EXCLUDED.latitude,
-      longitude = EXCLUDED.longitude
+      longitude = EXCLUDED.longitude;
   `;
 
   const values = uniqueBatch.flatMap(r => [
@@ -138,26 +138,23 @@ async function insertBatch(client, batch) {
   await client.query(queryText, values);
 }
 
-async function seedShelters() {
-  const client = await pool.connect();
+// ✅ Main seeding function
+async function seedShelters(clientFromCron = null) {
+  const client = clientFromCron || (await pool.connect());
   try {
     console.log("🌐 Connecting to database...");
 
-    // Fetch package metadata
     const { data: pkgData } = await axios.get(
       `https://ckan0.cf.opendata.inter.prod-toronto.ca/api/3/action/package_show?id=${PACKAGE_ID}`
     );
 
-    const resources = pkgData.result.resources.filter((r) => r.datastore_active);
+    const resources = pkgData.result.resources.filter(r => r.datastore_active);
     if (!resources.length) throw new Error("No active datastore resources found");
 
     const resourceId = resources[0].id;
-
-    // Fetch all records with pagination
     const records = await fetchAllRecords(resourceId);
     console.log(`✅ Total records fetched: ${records.length}`);
 
-    // Insert in batches
     for (let i = 0; i < records.length; i += BATCH_SIZE) {
       const batch = records.slice(i, i + BATCH_SIZE);
       await insertBatch(client, batch);
@@ -168,9 +165,15 @@ async function seedShelters() {
   } catch (err) {
     console.error("❌ Error seeding shelters:", err);
   } finally {
-    client.release();
-    await pool.end();
+    if (!clientFromCron) {
+      client.release();
+      await pool.end();
+    }
   }
 }
 
-seedShelters();
+module.exports = { seedShelters };
+
+if (require.main === module) {
+  seedShelters();
+}
