@@ -35,34 +35,25 @@ async function seedShelters() {
     let insertedCount = 0;
 
     for (const s of shelters) {
-      // Ensure numeric fields are numbers or null
-      const serviceUserCount = s.service_user_count ? Number(s.service_user_count) : null;
-      const capacityActualBed = s.capacity_actual_bed ? Number(s.capacity_actual_bed) : null;
-      const capacityActualRoom = s.capacity_actual_room ? Number(s.capacity_actual_room) : null;
-      const occupiedBeds = s.occupied_beds ? Number(s.occupied_beds) : null;
-      const unoccupiedBeds = s.unoccupied_beds ? Number(s.unoccupied_beds) : null;
-      const occupiedRooms = s.occupied_rooms ? Number(s.occupied_rooms) : null;
-      const unoccupiedRooms = s.unoccupied_rooms ? Number(s.unoccupied_rooms) : null;
-
       await pool.query(insertQuery, [
-        s.organization_name || null,
-        s.shelter_group || null,
-        s.location_name || null,
-        s.address || null,
-        s.postal_code || null,
-        s.city || null,
-        s.province || null,
-        s.program_name || null,
-        s.sector || null,
-        s.overnight_service_type || null,
-        serviceUserCount,
-        capacityActualBed,
-        capacityActualRoom,
-        occupiedBeds,
-        unoccupiedBeds,
-        occupiedRooms,
-        unoccupiedRooms,
-        s.occupancy_date || null,
+        s.ORGANIZATION_NAME || null,
+        s.SHELTER_GROUP || null,
+        s.LOCATION_NAME || null,
+        s.LOCATION_ADDRESS || null,
+        s.LOCATION_POSTAL_CODE || null,
+        s.LOCATION_CITY || null,
+        s.LOCATION_PROVINCE || null,
+        s.PROGRAM_NAME || null,
+        s.SECTOR || null,
+        s.OVERNIGHT_SERVICE_TYPE || null,
+        s.SERVICE_USER_COUNT ? Number(s.SERVICE_USER_COUNT) : null,
+        s.CAPACITY_ACTUAL_BED ? Number(s.CAPACITY_ACTUAL_BED) : null,
+        s.CAPACITY_ACTUAL_ROOM ? Number(s.CAPACITY_ACTUAL_ROOM) : null,
+        s.OCCUPIED_BEDS ? Number(s.OCCUPIED_BEDS) : null,
+        s.UNOCCUPIED_BEDS ? Number(s.UNOCCUPIED_BEDS) : null,
+        s.OCCUPIED_ROOMS ? Number(s.OCCUPIED_ROOMS) : null,
+        s.UNOCCUPIED_ROOMS ? Number(s.UNOCCUPIED_ROOMS) : null,
+        s.OCCUPANCY_DATE || null,
         new Date()
       ]);
 
