@@ -8,6 +8,7 @@ router.get("/", sheltersController.getAllShelters);
 // Return data for mapping (lat/lng + basic info)
 router.get("/map", sheltersController.getSheltersForMap);
 
+router.get("/metadata", getSheltersMetadata); // new route
 
 // Route for a shelter's location
 router.get("/:id/location", sheltersController.getShelterLocation);
@@ -18,5 +19,6 @@ router.get("/:id/occupancy", sheltersController.getShelterOccupancy);
 
 // Return a single shelter by ID
 router.get("/:id", sheltersController.getShelterById);
+
 
 module.exports = router;

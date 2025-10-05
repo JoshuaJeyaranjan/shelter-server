@@ -141,3 +141,25 @@ exports.getShelterOccupancy = async (req, res, next) => {
     next(err);
   }
 };
+
+// GET /api/shelters/metadata
+exports.getSheltersMetadata = async (req, res, next) => {
+  try {
+    // Get total number of shelters
+    const result = await pool.query("SELECT COUNT(*) AS totalRecords FROM shelters");
+    const totalRecords = parseInt(result.rows[0].totalrecords, 10);
+
+    // Get last updated timestamp (you can use occupancy_date or your own last updated column)
+    const lastUpdatedResult = await pool.query(
+      "SELECT MAX(occupancy_date) AS lastUpdated FROM shelters"
+    );
+    const lastRefreshed = lastUpdatedResult.rows[0].lastupdated;
+
+    res.json({
+      totalRecords,
+      lastRefreshed,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
