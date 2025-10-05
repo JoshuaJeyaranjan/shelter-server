@@ -8,7 +8,7 @@ router.get("/", sheltersController.getAllShelters);
 // Return data for mapping (lat/lng + basic info)
 router.get("/map", sheltersController.getSheltersForMap);
 
-router.get("/metadata", getSheltersMetadata); // new route
+router.get("/metadata", sheltersController.getSheltersMetadata); 
 
 // Route for a shelter's location
 router.get("/:id/location", sheltersController.getShelterLocation);
