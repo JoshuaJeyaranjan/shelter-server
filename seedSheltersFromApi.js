@@ -1,4 +1,3 @@
-// seedSheltersFromApi.js
 require("dotenv").config();
 const axios = require("axios");
 const pool = require("./config/db");
@@ -6,10 +5,13 @@ const pool = require("./config/db");
 const PACKAGE_ID = "21c83b32-d5a8-4106-a54f-010dbe49f6f2";
 const BATCH_SIZE = 500;
 
-// Normalize each record
+// Normalize each record using API _id as primary key
 function normalizeRecord(r) {
+  if (!r._id) return null; // skip invalid records
+
   return {
-    shelter_id: r.SHELTER_ID || null,
+    id: r._id, // primary key
+    shelter_id: r.SHELTER_ID || null, // optional reference
     organization_name: r.ORGANIZATION_NAME || null,
     shelter_group: r.SHELTER_GROUP || null,
     location_name: r.LOCATION_NAME || null,
@@ -20,15 +22,9 @@ function normalizeRecord(r) {
     program_name: r.PROGRAM_NAME || null,
     sector: r.SECTOR || null,
     overnight_service_type: r.OVERNIGHT_SERVICE_TYPE || null,
-    service_user_count: r.SERVICE_USER_COUNT
-      ? parseInt(r.SERVICE_USER_COUNT)
-      : null,
-    capacity_actual_bed: r.CAPACITY_ACTUAL_BED
-      ? parseInt(r.CAPACITY_ACTUAL_BED)
-      : null,
-    capacity_actual_room: r.CAPACITY_ACTUAL_ROOM
-      ? parseInt(r.CAPACITY_ACTUAL_ROOM)
-      : null,
+    service_user_count: r.SERVICE_USER_COUNT ? parseInt(r.SERVICE_USER_COUNT) : null,
+    capacity_actual_bed: r.CAPACITY_ACTUAL_BED ? parseInt(r.CAPACITY_ACTUAL_BED) : null,
+    capacity_actual_room: r.CAPACITY_ACTUAL_ROOM ? parseInt(r.CAPACITY_ACTUAL_ROOM) : null,
     occupied_beds: r.OCCUPIED_BEDS ? parseInt(r.OCCUPIED_BEDS) : null,
     unoccupied_beds: r.UNOCCUPIED_BEDS ? parseInt(r.UNOCCUPIED_BEDS) : null,
     occupied_rooms: r.OCCUPIED_ROOMS ? parseInt(r.OCCUPIED_ROOMS) : null,
@@ -37,6 +33,41 @@ function normalizeRecord(r) {
     latitude: r.LATITUDE || null,
     longitude: r.LONGITUDE || null,
   };
+}
+
+// Deduplicate by hash of identifying fields, keeping the latest occupancy_date
+function deduplicateByLatest(records) {
+  const recordMap = new Map();
+
+  for (const r of records) {
+    const hash = [
+      r.organization_name,
+      r.location_name,
+      r.address,
+      r.postal_code,
+      r.city,
+      r.province,
+      r.program_name,
+      r.sector,
+      r.overnight_service_type,
+    ]
+      .map(v => (v || "").trim().toLowerCase())
+      .join("||");
+
+    const dateValue = r.occupancy_date ? new Date(r.occupancy_date).getTime() : 0;
+
+    if (!recordMap.has(hash)) {
+      recordMap.set(hash, r);
+    } else {
+      const existing = recordMap.get(hash);
+      const existingDate = existing.occupancy_date ? new Date(existing.occupancy_date).getTime() : 0;
+      if (dateValue > existingDate) {
+        recordMap.set(hash, r);
+      }
+    }
+  }
+
+  return Array.from(recordMap.values());
 }
 
 // Fetch all records via pagination
@@ -49,12 +80,13 @@ async function fetchAllRecords(resourceId) {
   do {
     const { data } = await axios.get(
       "https://ckan0.cf.opendata.inter.prod-toronto.ca/api/3/action/datastore_search",
-      {
-        params: { id: resourceId, limit, offset },
-      }
+      { params: { id: resourceId, limit, offset } }
     );
 
-    const records = data.result.records.map(normalizeRecord);
+    const records = data.result.records
+      .map(normalizeRecord)
+      .filter(r => r !== null);
+
     allRecords = allRecords.concat(records);
     totalCount = data.result.total;
     offset += limit;
@@ -65,30 +97,21 @@ async function fetchAllRecords(resourceId) {
   return allRecords;
 }
 
-// Batch insert into Postgres
+// Batch insert/update into Postgres
 async function insertBatch(client, batch) {
   if (!batch.length) return;
 
-  const uniqueBatch = Object.values(
-    batch.reduce((acc, r) => {
-      acc[r.shelter_id] = r;
-      return acc;
-    }, {})
-  );
-
   const queryText = `
     INSERT INTO shelters (
-      shelter_id, organization_name, shelter_group, location_name, address, postal_code, city, province,
+      id, shelter_id, organization_name, shelter_group, location_name, address, postal_code, city, province,
       program_name, sector, overnight_service_type, service_user_count,
       capacity_actual_bed, capacity_actual_room, occupied_beds, unoccupied_beds,
       occupied_rooms, unoccupied_rooms, occupancy_date, latitude, longitude
-    ) VALUES ${uniqueBatch
-      .map(
-        (_, i) =>
-          `(${Array.from({ length: 21 }, (_, j) => `$${i * 21 + j + 1}`).join(",")})`
-      )
+    ) VALUES ${batch
+      .map((_, i) => `(${Array.from({ length: 22 }, (_, j) => `$${i * 22 + j + 1}`).join(",")})`)
       .join(",")}
-    ON CONFLICT (shelter_id) DO UPDATE SET
+    ON CONFLICT (id) DO UPDATE SET
+      shelter_id = EXCLUDED.shelter_id,
       organization_name = EXCLUDED.organization_name,
       shelter_group = EXCLUDED.shelter_group,
       location_name = EXCLUDED.location_name,
@@ -111,7 +134,8 @@ async function insertBatch(client, batch) {
       longitude = EXCLUDED.longitude;
   `;
 
-  const values = uniqueBatch.flatMap(r => [
+  const values = batch.flatMap(r => [
+    r.id,
     r.shelter_id,
     r.organization_name,
     r.shelter_group,
@@ -138,11 +162,15 @@ async function insertBatch(client, batch) {
   await client.query(queryText, values);
 }
 
-// ✅ Main seeding function
+// Main seeding function
 async function seedShelters(clientFromCron = null) {
   const client = clientFromCron || (await pool.connect());
+
   try {
     console.log("🌐 Connecting to database...");
+
+    console.log("🧹 Truncating shelters table...");
+    await client.query("TRUNCATE TABLE shelters RESTART IDENTITY CASCADE");
 
     const { data: pkgData } = await axios.get(
       `https://ckan0.cf.opendata.inter.prod-toronto.ca/api/3/action/package_show?id=${PACKAGE_ID}`
@@ -152,17 +180,30 @@ async function seedShelters(clientFromCron = null) {
     if (!resources.length) throw new Error("No active datastore resources found");
 
     const resourceId = resources[0].id;
-    const records = await fetchAllRecords(resourceId);
-    console.log(`✅ Total records fetched: ${records.length}`);
+    const allRecords = await fetchAllRecords(resourceId);
+    console.log(`📦 Total fetched: ${allRecords.length}`);
 
-    for (let i = 0; i < records.length; i += BATCH_SIZE) {
-      const batch = records.slice(i, i + BATCH_SIZE);
+    const dedupedRecords = deduplicateByLatest(allRecords);
+    console.log(`✅ Records after deduplication: ${dedupedRecords.length}`);
+
+    for (let i = 0; i < dedupedRecords.length; i += BATCH_SIZE) {
+      const batch = dedupedRecords.slice(i, i + BATCH_SIZE);
       await insertBatch(client, batch);
-      console.log(`📝 Inserted/Updated ${i + batch.length} / ${records.length} shelters...`);
+      console.log(`📝 Inserted/Updated ${i + batch.length} / ${dedupedRecords.length} shelters...`);
     }
+console.log("Updating MetaData...");
+    // After all shelters are inserted/updated successfully
+await client.query(`
+  INSERT INTO shelter_metadata (last_refreshed)
+  VALUES (NOW())
+  ON CONFLICT (id) DO UPDATE SET last_refreshed = EXCLUDED.last_refreshed;
+`);
 
     console.log("🎉 Seeding complete!");
-  } catch (err) {
+  } 
+  
+  
+  catch (err) {
     console.error("❌ Error seeding shelters:", err);
   } finally {
     if (!clientFromCron) {
