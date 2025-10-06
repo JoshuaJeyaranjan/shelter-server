@@ -5,7 +5,6 @@ const pool = require('./config/db')
 const PACKAGE_ID = '21c83b32-d5a8-4106-a54f-010dbe49f6f2'
 const BATCH_SIZE = 500
 
-// Normalize API record
 function normalizeRecord(r) {
   if (!r._id) return null
   return {
@@ -37,7 +36,6 @@ function normalizeRecord(r) {
   }
 }
 
-// Deduplicate by location
 function deduplicateLocations(records) {
   const locationMap = new Map()
   for (const r of records) {
@@ -46,14 +44,12 @@ function deduplicateLocations(records) {
     if (!locationMap.has(key)) {
       locationMap.set(key, { ...r, programs: [...r.programs] })
     } else {
-      // Merge programs
       locationMap.get(key).programs.push(...r.programs)
     }
   }
   return Array.from(locationMap.values())
 }
 
-// Fetch all records from CKAN API
 async function fetchAllRecords(resourceId) {
   const limit = 5000
   let offset = 0
@@ -75,9 +71,8 @@ async function fetchAllRecords(resourceId) {
   return allRecords
 }
 
-// Insert locations
 async function insertLocations(client, locations) {
-  if (!locations.length) return
+  if (!locations.length) return new Map()
   const queryText = `
     INSERT INTO locations (
       location_name, address, postal_code, city, province, latitude, longitude
@@ -97,7 +92,6 @@ async function insertLocations(client, locations) {
     l.longitude
   ])
   const res = await client.query(queryText, values)
-  // Map returned IDs to locations for program insert
   const idMap = new Map()
   res.rows.forEach(r => {
     const key = `${r.location_name}||${r.address}||${r.city}||${r.province}`.toLowerCase()
@@ -106,14 +100,21 @@ async function insertLocations(client, locations) {
   return idMap
 }
 
-// Insert programs
 async function insertPrograms(client, locations, idMap) {
+  let totalInserted = 0
+  let totalUpdated = 0
+  let totalSkipped = 0
   const programs = []
+
   locations.forEach(loc => {
     const locKey = `${loc.location_name}||${loc.address}||${loc.city}||${loc.province}`.toLowerCase()
     const locId = idMap.get(locKey)
     if (!locId) return
     loc.programs.forEach(p => {
+      if (!p.program_name) {
+        totalSkipped++
+        return
+      }
       programs.push([
         p.program_name,
         p.sector,
@@ -153,14 +154,17 @@ async function insertPrograms(client, locations, idMap) {
         occupied_rooms = EXCLUDED.occupied_rooms,
         unoccupied_rooms = EXCLUDED.unoccupied_rooms,
         occupancy_date = EXCLUDED.occupancy_date
+      RETURNING xmax
     `
     const values = batch.flat()
-    await client.query(queryText, values)
-    console.log(`📝 Inserted/Updated ${i + batch.length} / ${programs.length} programs...`)
+    const res = await client.query(queryText, values)
+    // Count inserts vs updates using xmax (Postgres returns 0 for inserts)
+    res.rows.forEach(r => (r.xmax === '0' ? totalInserted++ : totalUpdated++))
   }
+
+  return { totalInserted, totalUpdated, totalSkipped }
 }
 
-// Main seed function
 async function seedLocationsFromAPI() {
   const client = await pool.connect()
   try {
@@ -179,7 +183,7 @@ async function seedLocationsFromAPI() {
     console.log(`✅ Total locations after deduplication: ${locations.length}`)
 
     const idMap = await insertLocations(client, locations)
-    await insertPrograms(client, locations, idMap)
+    const { totalInserted, totalUpdated, totalSkipped } = await insertPrograms(client, locations, idMap)
 
     await client.query(`
       INSERT INTO shelter_metadata (id, last_refreshed)
@@ -187,7 +191,11 @@ async function seedLocationsFromAPI() {
       ON CONFLICT (id) DO UPDATE SET last_refreshed = EXCLUDED.last_refreshed
     `)
 
-    console.log('🎉 Seeding complete!')
+    console.log('🎉 Seeding complete! Summary:')
+    console.log(`  Locations inserted: ${idMap.size}`)
+    console.log(`  Programs inserted: ${totalInserted}`)
+    console.log(`  Programs updated: ${totalUpdated}`)
+    console.log(`  Programs skipped (missing name): ${totalSkipped}`)
   } catch (err) {
     console.error('❌ Error seeding locations:', err)
   } finally {
