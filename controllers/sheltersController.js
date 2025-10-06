@@ -1,8 +1,6 @@
 const pool = require("../config/db");
 
 // GET /api/shelters
-// server/routes/shelters.js
-const pool = require('../config/db');
 
 // GET /api/shelters
 exports.getAllShelters = async (req, res, next) => {
