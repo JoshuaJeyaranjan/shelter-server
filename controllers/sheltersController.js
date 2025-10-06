@@ -145,7 +145,7 @@ exports.getShelterOccupancy = async (req, res, next) => {
 // GET /api/shelters/metadata
 exports.getSheltersMetadata = async (req, res, next) => {
   try {
-    const result = await pool.query("SELECT * FROM shelter_metadata LIMIT 1");
+    const result = await pool.query("SELECT * FROM shelter_metadata WHERE id = $1");
     
     if (!result.rows[0]) {
       return res.json({ lastRefreshed: null});
