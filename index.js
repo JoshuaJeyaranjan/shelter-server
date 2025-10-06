@@ -14,7 +14,7 @@ app.use(express.json());
 app.use(morgan("dev"));
 
 // Routes
-app.use("/shelters", shelterRoutes);
+app.use("/locations", shelterRoutes);
 
 app.get("/", (req, res) => {
   res.send("Toronto Shelters API is running!");
