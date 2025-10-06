@@ -3,14 +3,13 @@ const pool = require("../config/db");
 // GET /api/shelters
 
 // GET /api/shelters
-// GET /api/shelters
 exports.getAllShelters = async (req, res, next) => {
   try {
     const { sector, city, minVacancyBeds, minVacancyRooms } = req.query;
 
     // Step 1: build the query with optional filters
     let query = "SELECT * FROM shelters";
-    const conditions = [];
+    const conditions = ["address IS NOT NULL"]; // only include shelters with addresses
     const params = [];
 
     if (sector) {
@@ -39,10 +38,12 @@ exports.getAllShelters = async (req, res, next) => {
 
     const { rows } = await pool.query(query, params);
 
-    // Step 2: group programs by location
+    // Step 2: group programs by location, filtering out invalid programs
     const locationsMap = new Map();
 
     rows.forEach(row => {
+      if (!row.program_name || !row.sector) return; // skip invalid programs
+
       const key = `${row.location_name}||${row.address}||${row.city}||${row.province}`;
       if (!locationsMap.has(key)) {
         locationsMap.set(key, {
@@ -74,73 +75,35 @@ exports.getAllShelters = async (req, res, next) => {
       });
     });
 
-    // Step 3: return an array of locations with nested programs
-    res.json({ locations: Array.from(locationsMap.values()) });
+    // Step 3: remove locations that ended up with no programs
+    const filteredLocations = Array.from(locationsMap.values()).filter(loc => loc.programs.length > 0);
+
+    res.json({ locations: filteredLocations });
   } catch (err) {
     next(err);
   }
 };
 
-// GET /api/shelters/:id
-exports.getShelterById = async (req, res, next) => {
-  try {
-    const { id } = req.params;
-
-    // Step 1: get the shelter by id
-    const shelterResult = await pool.query("SELECT * FROM shelters WHERE id = $1", [id]);
-    if (shelterResult.rows.length === 0) return res.status(404).json({ message: "Shelter not found" });
-
-    const shelter = shelterResult.rows[0];
-
-    // Step 2: get all programs for the same location
-    const programsResult = await pool.query(
-      `SELECT * FROM shelters
-       WHERE location_name = $1 AND address = $2 AND city = $3 AND province = $4`,
-      [shelter.location_name, shelter.address, shelter.city, shelter.province]
-    );
-
-    const locationData = {
-      location_name: shelter.location_name,
-      address: shelter.address,
-      city: shelter.city,
-      province: shelter.province,
-      latitude: shelter.latitude,
-      longitude: shelter.longitude,
-      programs: programsResult.rows.map(s => ({
-        id: s.id,
-        sector: s.sector,
-        program_name: s.program_name,
-        capacity_actual_bed: s.capacity_actual_bed,
-        capacity_actual_room: s.capacity_actual_room,
-        occupied_beds: s.occupied_beds,
-        occupied_rooms: s.occupied_rooms
-      }))
-    };
-
-    res.json(locationData);
-  } catch (err) {
-    next(err);
-  }
-};
-// GET /api/shelters/:id
 // GET /api/shelters/:id
 exports.getShelterById = async (req, res, next) => {
   try {
     const { id } = req.params;
 
     // Step 1: fetch the shelter row by id
-    const shelterResult = await pool.query("SELECT * FROM shelters WHERE id = $1", [id]);
+    const shelterResult = await pool.query("SELECT * FROM shelters WHERE id = $1 AND address IS NOT NULL", [id]);
     if (shelterResult.rows.length === 0) return res.status(404).json({ message: "Shelter not found" });
 
     const shelter = shelterResult.rows[0];
 
-    // Step 2: fetch all programs for this location
+    // Step 2: fetch all valid programs for this location
     const programsResult = await pool.query(
       `SELECT * FROM shelters 
-       WHERE location_name = $1 AND address = $2 AND city = $3 AND province = $4`,
+       WHERE location_name = $1 AND address = $2 AND city = $3 AND province = $4
+       AND program_name IS NOT NULL AND sector IS NOT NULL`,
       [shelter.location_name, shelter.address, shelter.city, shelter.province]
     );
 
+    // Step 3: construct the location object
     const locationData = {
       location_name: shelter.location_name,
       address: shelter.address,
@@ -169,6 +132,7 @@ exports.getShelterById = async (req, res, next) => {
     next(err);
   }
 };
+
 
 
 // GET /api/shelters/map
