@@ -35,21 +35,39 @@ function normalizeRecord(r) {
     }]
   }
 }
-
 function deduplicateLocations(records) {
-  const locationMap = new Map()
+  const locationMap = new Map();
+
   for (const r of records) {
-    if (!r.location_name || !r.address) continue
-    const key = `${r.location_name}||${r.address}||${r.city}||${r.province}`.toLowerCase()
+    // Skip completely invalid records
+    if (!r.location_name && !r.address) continue;
+
+    // Normalize string fields safely
+    const location_name = r.location_name?.toString().trim() || '';
+    const address = r.address?.toString().trim() || '';
+    const city = r.city?.toString().trim() || '';
+    const province = r.province?.toString().trim() || '';
+
+    if (!location_name || !address) continue; // still require essential fields
+
+    const key = `${location_name}||${address}||${city}||${province}`.toLowerCase();
+
     if (!locationMap.has(key)) {
-      locationMap.set(key, { ...r, programs: [...r.programs] })
+      locationMap.set(key, {
+        ...r,
+        location_name,
+        address,
+        city,
+        province,
+        programs: [...r.programs]
+      });
     } else {
-      locationMap.get(key).programs.push(...r.programs)
+      locationMap.get(key).programs.push(...r.programs);
     }
   }
-  return Array.from(locationMap.values())
-}
 
+  return Array.from(locationMap.values());
+}
 async function fetchAllRecords(resourceId) {
   const limit = 5000
   let offset = 0
@@ -72,17 +90,31 @@ async function fetchAllRecords(resourceId) {
 }
 
 async function insertLocations(client, locations) {
-  if (!locations.length) return new Map()
+  if (!locations.length) return { idMap: new Map(), inserted: 0, alreadyExists: 0 };
+
+  // Normalize for insertion
+  const normalizedLocations = locations.map(l => ({
+    location_name: l.location_name?.trim().toLowerCase(),
+    address: l.address?.trim().toLowerCase(),
+    postal_code: l.postal_code?.trim() || null,
+    city: l.city?.trim().toLowerCase(),
+    province: l.province?.trim().toLowerCase(),
+    latitude: l.latitude || null,
+    longitude: l.longitude || null,
+    programs: l.programs || []
+  }));
+
   const queryText = `
     INSERT INTO locations (
       location_name, address, postal_code, city, province, latitude, longitude
-    ) VALUES ${locations.map(
+    ) VALUES ${normalizedLocations.map(
       (_, i) => `($${i * 7 + 1}, $${i * 7 + 2}, $${i * 7 + 3}, $${i * 7 + 4}, $${i * 7 + 5}, $${i * 7 + 6}, $${i * 7 + 7})`
     ).join(',')}
     ON CONFLICT (location_name, address, city, province) DO NOTHING
     RETURNING id, location_name, address, city, province
-  `
-  const values = locations.flatMap(l => [
+  `;
+
+  const values = normalizedLocations.flatMap(l => [
     l.location_name,
     l.address,
     l.postal_code,
@@ -90,68 +122,94 @@ async function insertLocations(client, locations) {
     l.province,
     l.latitude,
     l.longitude
-  ])
-  const res = await client.query(queryText, values)
-  const idMap = new Map()
-  res.rows.forEach(r => {
-    const key = `${r.location_name}||${r.address}||${r.city}||${r.province}`.toLowerCase()
-    idMap.set(key, r.id)
-  })
-  return idMap
-}
+  ]);
 
+  const res = await client.query(queryText, values);
+
+  const idMap = new Map();
+  res.rows.forEach(r => {
+    const key = `${r.location_name}||${r.address}||${r.city}||${r.province}`;
+    idMap.set(key, r.id);
+  });
+
+  // Identify pre-existing locations (not returned by INSERT)
+  const preExistingKeys = normalizedLocations
+    .map(l => `${l.location_name}||${l.address}||${l.city}||${l.province}`)
+    .filter(key => !idMap.has(key));
+
+  if (preExistingKeys.length) {
+    const placeholders = preExistingKeys.map((_, i) => `$${i + 1}`).join(',');
+    const fetchQuery = `
+      SELECT id, location_name, address, city, province
+      FROM locations
+      WHERE (location_name || '||' || address || '||' || city || '||' || province) IN (${placeholders})
+    `;
+    const fetchRes = await client.query(fetchQuery, preExistingKeys);
+    fetchRes.rows.forEach(r => {
+      const key = `${r.location_name}||${r.address}||${r.city}||${r.province}`;
+      idMap.set(key, r.id);
+    });
+  }
+
+  const insertedCount = res.rows.length;
+  const alreadyExistsCount = locations.length - insertedCount;
+
+  return { idMap, inserted: insertedCount, alreadyExists: alreadyExistsCount };
+}
 async function insertPrograms(client, locations, idMap) {
   let totalInserted = 0;
   let totalUpdated = 0;
-  let totalSkipped = 0;
+  let totalSkipped = 0;      // missing name
+    let totalExisting = 0;
   const programs = [];
 
-locations.forEach(loc => {
-  const locKey = `${loc.location_name}||${loc.address}||${loc.city}||${loc.province}`.toLowerCase();
-  const locId = idMap.get(locKey);
-  if (!locId) return;
+  // Step 1: Deduplicate and normalize programs per location
+  locations.forEach(loc => {
+    const locKey = `${loc.location_name}||${loc.address}||${loc.city}||${loc.province}`.toLowerCase();
+    const locId = idMap.get(locKey);
+    if (!locId) return;
 
-  const programMap = new Map();
-  loc.programs.forEach(p => {
-    if (!p.program_name) {
-      totalSkipped++;
-      return;
-    }
-    const key = p.program_name.toLowerCase();
-    if (!programMap.has(key)) {
-      programMap.set(key, { ...p });
-    } else {
-      // merge numeric fields (choose sum, max, or latest occupancy_date depending on logic)
-      const existing = programMap.get(key);
-      existing.service_user_count = p.service_user_count || existing.service_user_count;
-      existing.capacity_actual_bed = p.capacity_actual_bed || existing.capacity_actual_bed;
-      existing.occupied_beds = p.occupied_beds || existing.occupied_beds;
-      existing.unoccupied_beds = p.unoccupied_beds || existing.unoccupied_beds;
-      existing.capacity_actual_room = p.capacity_actual_room || existing.capacity_actual_room;
-      existing.occupied_rooms = p.occupied_rooms || existing.occupied_rooms;
-      existing.unoccupied_rooms = p.unoccupied_rooms || existing.unoccupied_rooms;
-      existing.occupancy_date = p.occupancy_date || existing.occupancy_date;
-    }
+    const programMap = new Map();
+
+    loc.programs.forEach(p => {
+      if (!p.program_name) {
+        totalSkipped++;
+        return;
+      }
+
+      const key = `${locId}||${p.program_name?.trim().toLowerCase()}`;
+
+      const normalizedProgram = {
+        program_name: p.program_name?.trim() || null,
+        sector: p.sector?.trim() || null,
+        overnight_service_type: p.overnight_service_type?.trim() || null,
+        service_user_count: p.service_user_count != null ? p.service_user_count : null,
+        capacity_actual_bed: p.capacity_actual_bed != null ? p.capacity_actual_bed : null,
+        occupied_beds: p.occupied_beds != null ? p.occupied_beds : null,
+        unoccupied_beds: p.unoccupied_beds != null ? p.unoccupied_beds : null,
+        capacity_actual_room: p.capacity_actual_room != null ? p.capacity_actual_room : null,
+        occupied_rooms: p.occupied_rooms != null ? p.occupied_rooms : null,
+        unoccupied_rooms: p.unoccupied_rooms != null ? p.unoccupied_rooms : null,
+        occupancy_date: p.occupancy_date || null
+      };
+
+      if (!programMap.has(key)) {
+        programMap.set(key, normalizedProgram);
+      } else {
+        // merge numeric fields (use latest non-null)
+        const existing = programMap.get(key);
+        Object.keys(normalizedProgram).forEach(field => {
+          if (normalizedProgram[field] != null) {
+            existing[field] = normalizedProgram[field];
+          }
+        });
+      }
+    });
+
+    programMap.forEach(p => programs.push([...Object.values(p), locId]));
   });
 
-  programMap.forEach(p => {
-    programs.push([
-      p.program_name || null,
-      p.sector || null,
-      p.overnight_service_type || null,
-      p.service_user_count != null ? p.service_user_count : null,
-      p.capacity_actual_bed != null ? p.capacity_actual_bed : null,
-      p.occupied_beds != null ? p.occupied_beds : null,
-      p.unoccupied_beds != null ? p.unoccupied_beds : null,
-      p.capacity_actual_room != null ? p.capacity_actual_room : null,
-      p.occupied_rooms != null ? p.occupied_rooms : null,
-      p.unoccupied_rooms != null ? p.unoccupied_rooms : null,
-      p.occupancy_date || null,
-      locId
-    ]);
-  });
-});
-
+  // Step 2: Insert/update in batches
   for (let i = 0; i < programs.length; i += BATCH_SIZE) {
     const batch = programs.slice(i, i + BATCH_SIZE);
     const placeholders = batch.map(
@@ -176,15 +234,34 @@ locations.forEach(loc => {
         occupied_rooms = EXCLUDED.occupied_rooms,
         unoccupied_rooms = EXCLUDED.unoccupied_rooms,
         occupancy_date = EXCLUDED.occupancy_date
+      WHERE
+        programs.sector IS DISTINCT FROM EXCLUDED.sector OR
+        programs.overnight_service_type IS DISTINCT FROM EXCLUDED.overnight_service_type OR
+        programs.service_user_count IS DISTINCT FROM EXCLUDED.service_user_count OR
+        programs.capacity_actual_bed IS DISTINCT FROM EXCLUDED.capacity_actual_bed OR
+        programs.occupied_beds IS DISTINCT FROM EXCLUDED.occupied_beds OR
+        programs.unoccupied_beds IS DISTINCT FROM EXCLUDED.unoccupied_beds OR
+        programs.capacity_actual_room IS DISTINCT FROM EXCLUDED.capacity_actual_room OR
+        programs.occupied_rooms IS DISTINCT FROM EXCLUDED.occupied_rooms OR
+        programs.unoccupied_rooms IS DISTINCT FROM EXCLUDED.unoccupied_rooms OR
+        programs.occupancy_date IS DISTINCT FROM EXCLUDED.occupancy_date
       RETURNING xmax;
     `;
 
     const values = batch.flat();
     const res = await client.query(queryText, values);
-    res.rows.forEach(r => (r.xmax === '0' ? totalInserted++ : totalUpdated++));
+
+    res.rows.forEach(r => {
+      if (r.xmax === '0') {
+        totalInserted++;
+      } else if (r.xmax === '1') {
+        totalUpdated++;
+      }              
+    });
   }
 
-  return { totalInserted, totalUpdated, totalSkipped };
+totalExisting = programs.length - totalInserted - totalUpdated - totalSkipped;
+return { totalInserted, totalUpdated, totalSkipped, totalExisting };
 }
 async function seedLocationsFromAPI() {
   const client = await pool.connect()
@@ -203,20 +280,22 @@ async function seedLocationsFromAPI() {
     const locations = deduplicateLocations(allRecords)
     console.log(`✅ Total locations after deduplication: ${locations.length}`)
 
-    const idMap = await insertLocations(client, locations)
-    const { totalInserted, totalUpdated, totalSkipped } = await insertPrograms(client, locations, idMap)
-
+    const { idMap, inserted: locInserted, alreadyExists: locExisting } = await insertLocations(client, locations);
+    const { totalInserted, totalUpdated, totalSkipped, totalExisting} = await insertPrograms(client, locations, idMap)
+    
     await client.query(`
       INSERT INTO shelter_metadata (id, last_refreshed)
       VALUES (1, NOW())
       ON CONFLICT (id) DO UPDATE SET last_refreshed = EXCLUDED.last_refreshed
     `)
 
-    console.log('🎉 Seeding complete! Summary:')
-    console.log(`  Locations inserted: ${idMap.size}`)
-    console.log(`  Programs inserted: ${totalInserted}`)
-    console.log(`  Programs updated: ${totalUpdated}`)
-    console.log(`  Programs skipped (missing name): ${totalSkipped}`)
+console.log('🎉 Seeding complete! Summary:')
+console.log(`  Locations inserted: ${locInserted}`)
+console.log(`  Locations already existed: ${locExisting}`)
+console.log(`  Programs inserted: ${totalInserted}`)
+console.log(`  Programs updated: ${totalUpdated}`)
+console.log(`  Programs already existed: ${totalExisting}`)
+console.log(`  Programs skipped (missing name): ${totalSkipped}`)
   } catch (err) {
     console.error('❌ Error seeding locations:', err)
   } finally {
