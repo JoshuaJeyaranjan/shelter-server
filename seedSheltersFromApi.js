@@ -5,13 +5,12 @@ const pool = require('./config/db')
 const PACKAGE_ID = '21c83b32-d5a8-4106-a54f-010dbe49f6f2'
 const BATCH_SIZE = 500
 
-// Normalize each record using API _id as primary key
-function normalizeRecord (r) {
-  if (!r._id) return null // skip invalid records
-
+// Normalize record from API
+function normalizeRecord(r) {
+  if (!r._id) return null
   return {
-    id: r._id, // primary key
-    shelter_id: r.SHELTER_ID || null, // optional reference
+    id: r._id,
+    shelter_id: r.SHELTER_ID || null,
     organization_name: r.ORGANIZATION_NAME || null,
     shelter_group: r.SHELTER_GROUP || null,
     location_name: r.LOCATION_NAME || null,
@@ -22,64 +21,44 @@ function normalizeRecord (r) {
     program_name: r.PROGRAM_NAME || null,
     sector: r.SECTOR || null,
     overnight_service_type: r.OVERNIGHT_SERVICE_TYPE || null,
-    service_user_count: r.SERVICE_USER_COUNT
-      ? parseInt(r.SERVICE_USER_COUNT)
-      : null,
-    capacity_actual_bed: r.CAPACITY_ACTUAL_BED
-      ? parseInt(r.CAPACITY_ACTUAL_BED)
-      : null,
-    capacity_actual_room: r.CAPACITY_ACTUAL_ROOM
-      ? parseInt(r.CAPACITY_ACTUAL_ROOM)
-      : null,
+    service_user_count: r.SERVICE_USER_COUNT ? parseInt(r.SERVICE_USER_COUNT) : null,
+    capacity_actual_bed: r.CAPACITY_ACTUAL_BED ? parseInt(r.CAPACITY_ACTUAL_BED) : null,
+    capacity_actual_room: r.CAPACITY_ACTUAL_ROOM ? parseInt(r.CAPACITY_ACTUAL_ROOM) : null,
     occupied_beds: r.OCCUPIED_BEDS ? parseInt(r.OCCUPIED_BEDS) : null,
     unoccupied_beds: r.UNOCCUPIED_BEDS ? parseInt(r.UNOCCUPIED_BEDS) : null,
     occupied_rooms: r.OCCUPIED_ROOMS ? parseInt(r.OCCUPIED_ROOMS) : null,
     unoccupied_rooms: r.UNOCCUPIED_ROOMS ? parseInt(r.UNOCCUPIED_ROOMS) : null,
     occupancy_date: r.OCCUPANCY_DATE || null,
+    // latitude & longitude intentionally left undefined
   }
 }
 
-// Deduplicate by hash of identifying fields, keeping the latest occupancy_date
-function deduplicateByLatest (records) {
-  const recordMap = new Map()
+// Deduplicate records by location
+function deduplicateByLocation(records) {
+  const locationMap = new Map()
 
   for (const r of records) {
-    const hash = [
-      r.organization_name,
-      r.location_name,
-      r.address,
-      r.postal_code,
-      r.city,
-      r.province,
-      r.program_name,
-      r.sector,
-      r.overnight_service_type
-    ]
-      .map(v => (v || '').trim().toLowerCase())
-      .join('||')
-
-    const dateValue = r.occupancy_date
-      ? new Date(r.occupancy_date).getTime()
-      : 0
-
-    if (!recordMap.has(hash)) {
-      recordMap.set(hash, r)
-    } else {
-      const existing = recordMap.get(hash)
-      const existingDate = existing.occupancy_date
-        ? new Date(existing.occupancy_date).getTime()
-        : 0
-      if (dateValue > existingDate) {
-        recordMap.set(hash, r)
-      }
+    const key = `${r.location_name}||${r.address}||${r.city}||${r.province}`.toLowerCase()
+    if (!locationMap.has(key)) {
+      locationMap.set(key, { ...r, programs: [] })
     }
+    locationMap.get(key).programs.push({
+      id: r.id,
+      program_name: r.program_name,
+      sector: r.sector,
+      capacity_actual_bed: r.capacity_actual_bed,
+      capacity_actual_room: r.capacity_actual_room,
+      occupied_beds: r.occupied_beds,
+      occupied_rooms: r.occupied_rooms,
+      overnight_service_type: r.overnight_service_type
+    })
   }
 
-  return Array.from(recordMap.values())
+  return Array.from(locationMap.values())
 }
 
 // Fetch all records via pagination
-async function fetchAllRecords (resourceId) {
+async function fetchAllRecords(resourceId) {
   const limit = 5000
   let offset = 0
   let allRecords = []
@@ -90,38 +69,28 @@ async function fetchAllRecords (resourceId) {
       'https://ckan0.cf.opendata.inter.prod-toronto.ca/api/3/action/datastore_search',
       { params: { id: resourceId, limit, offset } }
     )
-
-    const records = data.result.records
-      .map(normalizeRecord)
-      .filter(r => r !== null)
-
+    const records = data.result.records.map(normalizeRecord).filter(Boolean)
     allRecords = allRecords.concat(records)
     totalCount = data.result.total
     offset += limit
-
     console.log(`📦 Fetched ${allRecords.length} / ${totalCount} records...`)
   } while (offset < totalCount)
 
   return allRecords
 }
 
-// Batch insert/update into Postgres
-async function insertBatch (client, batch) {
+// Insert/update batch
+async function insertBatch(client, batch) {
   if (!batch.length) return
 
   const queryText = `
     INSERT INTO shelters (
       id, shelter_id, organization_name, shelter_group, location_name, address, postal_code, city, province,
-      program_name, sector, overnight_service_type, service_user_count,
+      latitude, longitude, occupancy_date,
       capacity_actual_bed, capacity_actual_room, occupied_beds, unoccupied_beds,
-      occupied_rooms, unoccupied_rooms, occupancy_date, latitude, longitude
+      occupied_rooms, unoccupied_rooms
     ) VALUES ${batch
-      .map(
-        (_, i) =>
-          `(${Array.from({ length: 22 }, (_, j) => `$${i * 22 + j + 1}`).join(
-            ','
-          )})`
-      )
+      .map((_, i) => `(${Array.from({ length: 18 }, (_, j) => `$${i * 18 + j + 1}`).join(',')})`)
       .join(',')}
     ON CONFLICT (id) DO UPDATE SET
       shelter_id = EXCLUDED.shelter_id,
@@ -132,19 +101,15 @@ async function insertBatch (client, batch) {
       postal_code = EXCLUDED.postal_code,
       city = EXCLUDED.city,
       province = EXCLUDED.province,
-      program_name = EXCLUDED.program_name,
-      sector = EXCLUDED.sector,
-      overnight_service_type = EXCLUDED.overnight_service_type,
-      service_user_count = EXCLUDED.service_user_count,
+      occupancy_date = EXCLUDED.occupancy_date,
       capacity_actual_bed = EXCLUDED.capacity_actual_bed,
       capacity_actual_room = EXCLUDED.capacity_actual_room,
       occupied_beds = EXCLUDED.occupied_beds,
       unoccupied_beds = EXCLUDED.unoccupied_beds,
       occupied_rooms = EXCLUDED.occupied_rooms,
       unoccupied_rooms = EXCLUDED.unoccupied_rooms,
-      occupancy_date = EXCLUDED.occupancy_date,
-     latitude = COALESCE(EXCLUDED.latitude, shelters.latitude),
-longitude = COALESCE(EXCLUDED.longitude, shelters.longitude);
+      latitude = COALESCE(EXCLUDED.latitude, shelters.latitude),
+      longitude = COALESCE(EXCLUDED.longitude, shelters.longitude);
   `
 
   const values = batch.flatMap(r => [
@@ -157,65 +122,49 @@ longitude = COALESCE(EXCLUDED.longitude, shelters.longitude);
     r.postal_code,
     r.city,
     r.province,
-    r.program_name,
-    r.sector,
-    r.overnight_service_type,
-    r.service_user_count,
+    r.latitude,
+    r.longitude,
+    r.occupancy_date,
     r.capacity_actual_bed,
     r.capacity_actual_room,
     r.occupied_beds,
     r.unoccupied_beds,
     r.occupied_rooms,
-    r.unoccupied_rooms,
-    r.occupancy_date,
-    r.latitude,
-    r.longitude
+    r.unoccupied_rooms
   ])
 
   await client.query(queryText, values)
 }
 
-// Main seeding function
-async function seedShelters (clientFromCron = null) {
+// Main seed function
+async function seedShelters(clientFromCron = null) {
   const client = clientFromCron || (await pool.connect())
-
   try {
     console.log('🌐 Connecting to database...')
-
     const { data: pkgData } = await axios.get(
       `https://ckan0.cf.opendata.inter.prod-toronto.ca/api/3/action/package_show?id=${PACKAGE_ID}`
     )
-
     const resources = pkgData.result.resources.filter(r => r.datastore_active)
-    if (!resources.length)
-      throw new Error('No active datastore resources found')
-
+    if (!resources.length) throw new Error('No active datastore resources found')
     const resourceId = resources[0].id
+
     const allRecords = await fetchAllRecords(resourceId)
     console.log(`📦 Total fetched: ${allRecords.length}`)
 
-    const dedupedRecords = deduplicateByLatest(allRecords)
-    console.log(`✅ Records after deduplication: ${dedupedRecords.length}`)
+    const dedupedByLocation = deduplicateByLocation(allRecords)
+    console.log(`✅ Total locations after deduplication: ${dedupedByLocation.length}`)
 
-    for (let i = 0; i < dedupedRecords.length; i += BATCH_SIZE) {
-      const batch = dedupedRecords.slice(i, i + BATCH_SIZE)
+    for (let i = 0; i < dedupedByLocation.length; i += BATCH_SIZE) {
+      const batch = dedupedByLocation.slice(i, i + BATCH_SIZE)
       await insertBatch(client, batch)
-      console.log(
-        `📝 Inserted/Updated ${i + batch.length} / ${
-          dedupedRecords.length
-        } shelters...`
-      )
+      console.log(`📝 Inserted/Updated ${i + batch.length} / ${dedupedByLocation.length} locations...`)
     }
 
-    // After all shelters are inserted/updated successfully
-await client.query(`
-  INSERT INTO shelter_metadata (id, last_refreshed)
-  VALUES (1, NOW())
-  ON CONFLICT (id) DO UPDATE 
-  SET last_refreshed = EXCLUDED.last_refreshed;
-`);
-    const { rows } = await client.query(`SELECT * FROM shelter_metadata WHERE id = 1`);
-console.log("📊 Updated shelter metadata:", rows[0])
+    await client.query(`
+      INSERT INTO shelter_metadata (id, last_refreshed)
+      VALUES (1, NOW())
+      ON CONFLICT (id) DO UPDATE SET last_refreshed = EXCLUDED.last_refreshed;
+    `)
     console.log('🎉 Seeding complete!')
   } catch (err) {
     console.error('❌ Error seeding shelters:', err)
