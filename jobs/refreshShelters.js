@@ -1,26 +1,20 @@
 require("dotenv").config();
-const cron = require("node-cron");
-const { seedShelters } = require("../seedSheltersFromApi");
-const { Pool } = require("pg");
-
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false },
-});
+const { seedLocationsFromAPI } = require("../seedLocationsFromApi");
 
 async function runJob() {
-  console.log("🌐 Connecting to database...");
-  const client = await pool.connect();
+  console.log("🌐 Starting shelter refresh job...");
+
   try {
-    console.log("🔄 Running daily shelter refresh job...");
-    await seedShelters(client);
-    console.log("✅ Shelter data refreshed successfully");
+    await seedLocationsFromAPI();
+    console.log("✅ Shelter data refreshed successfully!");
   } catch (err) {
-    console.error("❌ Error during refresh:", err);
+    console.error("❌ Error during shelter refresh:", err);
+    process.exit(1); // indicate failure to Render
   } finally {
-    client.release();
+    console.log("🌐 Job finished.");
+    process.exit(0); // exit cleanly
   }
 }
 
-// Run once immediately (optional)
+// Run immediately
 runJob();
