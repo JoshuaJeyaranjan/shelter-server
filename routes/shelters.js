@@ -1,24 +1,20 @@
 const express = require("express");
 const router = express.Router();
-const sheltersController = require("../controllers/sheltersController");
+const locationsController = require("../controllers/locationsController");
 
-// Return all shelters, optionally filtered by query params
-router.get("/", sheltersController.getAllShelters);
+// Return all locations, optionally filtered by query params
+router.get("/", locationsController.getAllLocations);
 
 // Return data for mapping (lat/lng + basic info)
-router.get("/map", sheltersController.getSheltersForMap);
+router.get("/map", locationsController.getLocationsForMap);
 
-router.get("/metadata", sheltersController.getSheltersMetadata); 
+// Return metadata
+router.get("/metadata", locationsController.getSheltersMetadata);
 
-// Route for a shelter's location
-router.get("/:id/location", sheltersController.getShelterLocation);
+// Route for a location's basic info
+router.get("/:id/location", locationsController.getLocationById);
 
-// Occupancy info per shelter
-router.get("/:id/occupancy", sheltersController.getShelterOccupancy);
-
-
-// Return a single shelter by ID
-router.get("/:id", sheltersController.getShelterById);
-
+// Occupancy info per location
+router.get("/:id/occupancy", locationsController.getLocationOccupancy);
 
 module.exports = router;
