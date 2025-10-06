@@ -101,48 +101,70 @@ async function insertLocations(client, locations) {
 }
 
 async function insertPrograms(client, locations, idMap) {
-  let totalInserted = 0
-  let totalUpdated = 0
-  let totalSkipped = 0
-  const programs = []
+  let totalInserted = 0;
+  let totalUpdated = 0;
+  let totalSkipped = 0;
+  const programs = [];
 
-  locations.forEach(loc => {
-    const locKey = `${loc.location_name}||${loc.address}||${loc.city}||${loc.province}`.toLowerCase()
-    const locId = idMap.get(locKey)
-    if (!locId) return
-    loc.programs.forEach(p => {
-      if (!p.program_name) {
-        totalSkipped++
-        return
-      }
-      programs.push([
-        p.program_name,
-        p.sector,
-        p.overnight_service_type,
-        p.service_user_count,
-        p.capacity_actual_bed,
-        p.occupied_beds,
-        p.unoccupied_beds,
-        p.capacity_actual_room,
-        p.occupied_rooms,
-        p.unoccupied_rooms,
-        p.occupancy_date,
-        locId
-      ])
-    })
-  })
+locations.forEach(loc => {
+  const locKey = `${loc.location_name}||${loc.address}||${loc.city}||${loc.province}`.toLowerCase();
+  const locId = idMap.get(locKey);
+  if (!locId) return;
+
+  const programMap = new Map();
+  loc.programs.forEach(p => {
+    if (!p.program_name) {
+      totalSkipped++;
+      return;
+    }
+    const key = p.program_name.toLowerCase();
+    if (!programMap.has(key)) {
+      programMap.set(key, { ...p });
+    } else {
+      // merge numeric fields (choose sum, max, or latest occupancy_date depending on logic)
+      const existing = programMap.get(key);
+      existing.service_user_count = p.service_user_count || existing.service_user_count;
+      existing.capacity_actual_bed = p.capacity_actual_bed || existing.capacity_actual_bed;
+      existing.occupied_beds = p.occupied_beds || existing.occupied_beds;
+      existing.unoccupied_beds = p.unoccupied_beds || existing.unoccupied_beds;
+      existing.capacity_actual_room = p.capacity_actual_room || existing.capacity_actual_room;
+      existing.occupied_rooms = p.occupied_rooms || existing.occupied_rooms;
+      existing.unoccupied_rooms = p.unoccupied_rooms || existing.unoccupied_rooms;
+      existing.occupancy_date = p.occupancy_date || existing.occupancy_date;
+    }
+  });
+
+  programMap.forEach(p => {
+    programs.push([
+      p.program_name || null,
+      p.sector || null,
+      p.overnight_service_type || null,
+      p.service_user_count != null ? p.service_user_count : null,
+      p.capacity_actual_bed != null ? p.capacity_actual_bed : null,
+      p.occupied_beds != null ? p.occupied_beds : null,
+      p.unoccupied_beds != null ? p.unoccupied_beds : null,
+      p.capacity_actual_room != null ? p.capacity_actual_room : null,
+      p.occupied_rooms != null ? p.occupied_rooms : null,
+      p.unoccupied_rooms != null ? p.unoccupied_rooms : null,
+      p.occupancy_date || null,
+      locId
+    ]);
+  });
+});
 
   for (let i = 0; i < programs.length; i += BATCH_SIZE) {
-    const batch = programs.slice(i, i + BATCH_SIZE)
+    const batch = programs.slice(i, i + BATCH_SIZE);
+    const placeholders = batch.map(
+      (_, j) => `(${Array.from({ length: 12 }, (_, k) => `$${j * 12 + k + 1}`).join(',')})`
+    ).join(',');
+
     const queryText = `
       INSERT INTO programs (
         program_name, sector, overnight_service_type, service_user_count,
         capacity_actual_bed, occupied_beds, unoccupied_beds,
         capacity_actual_room, occupied_rooms, unoccupied_rooms,
         occupancy_date, location_id
-      ) VALUES ${batch.map(
-        (_, j) => `(${Array.from({ length: 12 }, (_, k) => `$${j * 12 + k + 1}`).join(',')})`
-      ).join(',')}
+      ) VALUES ${placeholders}
       ON CONFLICT (location_id, program_name) DO UPDATE SET
         sector = EXCLUDED.sector,
         overnight_service_type = EXCLUDED.overnight_service_type,
@@ -154,17 +176,16 @@ async function insertPrograms(client, locations, idMap) {
         occupied_rooms = EXCLUDED.occupied_rooms,
         unoccupied_rooms = EXCLUDED.unoccupied_rooms,
         occupancy_date = EXCLUDED.occupancy_date
-      RETURNING xmax
-    `
-    const values = batch.flat()
-    const res = await client.query(queryText, values)
-    // Count inserts vs updates using xmax (Postgres returns 0 for inserts)
-    res.rows.forEach(r => (r.xmax === '0' ? totalInserted++ : totalUpdated++))
+      RETURNING xmax;
+    `;
+
+    const values = batch.flat();
+    const res = await client.query(queryText, values);
+    res.rows.forEach(r => (r.xmax === '0' ? totalInserted++ : totalUpdated++));
   }
 
-  return { totalInserted, totalUpdated, totalSkipped }
+  return { totalInserted, totalUpdated, totalSkipped };
 }
-
 async function seedLocationsFromAPI() {
   const client = await pool.connect()
   try {
