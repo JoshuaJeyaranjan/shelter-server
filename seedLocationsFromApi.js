@@ -1,9 +1,9 @@
-require('dotenv').config()
-const axios = require('axios')
-const pool = require('./config/db')
+require('dotenv').config();
+const axios = require('axios');
+const pool = require('./config/db');
 
-const PACKAGE_ID = '21c83b32-d5a8-4106-a54f-010dbe49f6f2'
-const BATCH_SIZE = 500
+const PACKAGE_ID = '21c83b32-d5a8-4106-a54f-010dbe49f6f2';
+const BATCH_SIZE = 500;
 
 function normalizeRecord(r) {
   if (!r._id) return null;
@@ -36,18 +36,18 @@ function normalizeRecord(r) {
     }]
   };
 }
+
 function deduplicateLocations(records) {
   const locationMap = new Map();
 
   for (const r of records) {
     if (!r.location_name || !r.address) continue;
 
-    // Use trimmed values as key, preserving capitalization
     const key = `${r.location_name.trim()}||${r.address.trim()}||${r.city?.trim()}||${r.province?.trim()}`;
 
     if (!locationMap.has(key)) {
-      locationMap.set(key, { 
-        ...r, 
+      locationMap.set(key, {
+        ...r,
         location_name: r.location_name.trim(),
         address: r.address.trim(),
         city: r.city?.trim(),
@@ -61,100 +61,100 @@ function deduplicateLocations(records) {
 
   return Array.from(locationMap.values());
 }
+
 async function fetchAllRecords(resourceId) {
-  const limit = 5000
-  let offset = 0
-  let allRecords = []
-  let totalCount = 0
+  const limit = 5000;
+  let offset = 0;
+  let allRecords = [];
+  let totalCount = 0;
 
   do {
     const { data } = await axios.get(
       'https://ckan0.cf.opendata.inter.prod-toronto.ca/api/3/action/datastore_search',
       { params: { id: resourceId, limit, offset } }
-    )
-    const records = data.result.records.map(normalizeRecord).filter(Boolean)
-    allRecords = allRecords.concat(records)
-    totalCount = data.result.total
-    offset += limit
-    console.log(`📦 Fetched ${allRecords.length} / ${totalCount} records...`)
-  } while (offset < totalCount)
+    );
+    const records = data.result.records.map(normalizeRecord).filter(Boolean);
+    allRecords = allRecords.concat(records);
+    totalCount = data.result.total;
+    offset += limit;
+    console.log(`📦 Fetched ${allRecords.length} / ${totalCount} records...`);
+  } while (offset < totalCount);
 
-  return allRecords
+  return allRecords;
 }
 
 async function insertLocations(client, locations) {
-  if (!locations.length) return new Map();
+  if (!locations.length) return { idMap: new Map(), inserted: 0, alreadyExists: 0 };
 
-  const normalizedLocations = locations.map(l => ({
-    location_name: l.location_name?.trim(),
-    address: l.address?.trim(),
-    postal_code: l.postal_code?.trim() || null,
-    city: l.city?.trim(),
-    province: l.province?.trim(),
-    latitude: l.latitude || null,
-    longitude: l.longitude || null,
-    programs: l.programs || []
-  }));
-
-  const queryText = `
-    INSERT INTO locations (
-      location_name, address, postal_code, city, province, latitude, longitude
-    ) VALUES ${normalizedLocations.map(
-      (_, i) => `($${i * 7 + 1}, $${i * 7 + 2}, $${i * 7 + 3}, $${i * 7 + 4}, $${i * 7 + 5}, $${i * 7 + 6}, $${i * 7 + 7})`
-    ).join(',')}
-    ON CONFLICT (location_name, address, city, province) DO NOTHING
-    RETURNING id, location_name, address, city, province
-  `;
-
-  const values = normalizedLocations.flatMap(l => [
-    l.location_name,
-    l.address,
-    l.postal_code,
-    l.city,
-    l.province,
-    l.latitude,
-    l.longitude
-  ]);
-
-  const res = await client.query(queryText, values);
-
+  let inserted = 0;
+  let alreadyExists = 0;
   const idMap = new Map();
-  res.rows.forEach(r => {
-    const key = `${r.location_name}||${r.address}||${r.city}||${r.province}`;
-    idMap.set(key, r.id);
-  });
 
-  // Map pre-existing locations not returned by RETURNING
-  normalizedLocations.forEach(l => {
-    const key = `${l.location_name}||${l.address}||${l.city}||${l.province}`;
-    if (!idMap.has(key)) idMap.set(key, null); 
-  });
+  for (const l of locations) {
+    const { location_name, address, postal_code, city, province, latitude, longitude } = l;
 
-  return idMap;
+    // Check if the location already exists
+    const existing = await client.query(
+      `SELECT id, latitude, longitude FROM locations 
+       WHERE location_name = $1 AND address = $2 AND city = $3 AND province = $4`,
+      [location_name, address, city, province]
+    );
+
+    if (existing.rows.length > 0) {
+      const existingRow = existing.rows[0];
+      alreadyExists++;
+      idMap.set(`${location_name}||${address}||${city}||${province}`, existingRow.id);
+
+      // Optionally update non-destructive fields (e.g., city casing or postal code changes)
+      await client.query(`
+        UPDATE locations
+        SET postal_code = $1,
+            city = $2,
+            province = $3
+        WHERE id = $4
+      `, [postal_code, city, province, existingRow.id]);
+
+    } else {
+      // Insert new location, respecting lat/long if available
+      const res = await client.query(`
+        INSERT INTO locations (location_name, address, postal_code, city, province, latitude, longitude)
+        VALUES ($1,$2,$3,$4,$5,$6,$7)
+        RETURNING id
+      `, [location_name, address, postal_code, city, province, latitude, longitude]);
+
+      inserted++;
+      idMap.set(`${location_name}||${address}||${city}||${province}`, res.rows[0].id);
+    }
+  }
+
+  return { idMap, inserted, alreadyExists };
 }
+
 async function insertPrograms(client, locations, idMap) {
   let totalInserted = 0;
   let totalUpdated = 0;
   let totalSkipped = 0;
+
+  // Use a global map to ensure no duplicates across batches
+  const seenKeys = new Set();
   const programs = [];
 
-  locations.forEach(loc => {
+  for (const loc of locations) {
     const locKey = `${loc.location_name}||${loc.address}||${loc.city}||${loc.province}`;
     const locId = idMap.get(locKey);
-    if (!locId) return;
+    if (!locId) continue;
 
     const programMap = new Map();
 
-    loc.programs.forEach(p => {
+    for (const p of loc.programs) {
       if (!p.program_name) {
         totalSkipped++;
-        return;
+        continue;
       }
-      const key = `${locId}||${p.program_name?.trim()}`; // use exact casing
+      const programName = p.program_name.trim();
+      const key = `${locId}||${programName}`;
 
-      if (!programMap.has(key)) {
-        programMap.set(key, { ...p });
-      } else {
+      if (programMap.has(key)) {
         const existing = programMap.get(key);
         existing.service_user_count = p.service_user_count ?? existing.service_user_count;
         existing.capacity_actual_bed = p.capacity_actual_bed ?? existing.capacity_actual_bed;
@@ -164,12 +164,18 @@ async function insertPrograms(client, locations, idMap) {
         existing.occupied_rooms = p.occupied_rooms ?? existing.occupied_rooms;
         existing.unoccupied_rooms = p.unoccupied_rooms ?? existing.unoccupied_rooms;
         existing.occupancy_date = p.occupancy_date ?? existing.occupancy_date;
+      } else {
+        programMap.set(key, { ...p, program_name: programName });
       }
-    });
+    }
 
-    programMap.forEach(p => {
+    for (const [key, p] of programMap.entries()) {
+      // Skip if already added globally
+      if (seenKeys.has(key)) continue;
+      seenKeys.add(key);
+
       programs.push([
-        p.program_name?.trim() || null,
+        p.program_name,
         p.sector?.trim() || null,
         p.overnight_service_type?.trim() || null,
         p.service_user_count ?? null,
@@ -182,14 +188,15 @@ async function insertPrograms(client, locations, idMap) {
         p.occupancy_date || null,
         locId
       ]);
-    });
-  });
+    }
+  }
 
+  const BATCH_SIZE = 500;
   for (let i = 0; i < programs.length; i += BATCH_SIZE) {
     const batch = programs.slice(i, i + BATCH_SIZE);
-    const placeholders = batch.map(
-      (_, j) => `(${Array.from({ length: 12 }, (_, k) => `$${j * 12 + k + 1}`).join(',')})`
-    ).join(',');
+    const placeholders = batch
+      .map((_, j) => `(${Array.from({ length: 12 }, (_, k) => `$${j * 12 + k + 1}`).join(',')})`)
+      .join(',');
 
     const queryText = `
       INSERT INTO programs (
@@ -219,49 +226,50 @@ async function insertPrograms(client, locations, idMap) {
 
   return { totalInserted, totalUpdated, totalSkipped };
 }
+
 async function seedLocationsFromAPI() {
-  const client = await pool.connect()
+  const client = await pool.connect();
   try {
-    console.log('🌐 Connecting to database...')
+    console.log('🌐 Connecting to database...');
     const { data: pkgData } = await axios.get(
       `https://ckan0.cf.opendata.inter.prod-toronto.ca/api/3/action/package_show?id=${PACKAGE_ID}`
-    )
-    const resources = pkgData.result.resources.filter(r => r.datastore_active)
-    if (!resources.length) throw new Error('No active datastore resources found')
-    const resourceId = resources[0].id
+    );
+    const resources = pkgData.result.resources.filter(r => r.datastore_active);
+    if (!resources.length) throw new Error('No active datastore resources found');
+    const resourceId = resources[0].id;
 
-    const allRecords = await fetchAllRecords(resourceId)
-    console.log(`📦 Total fetched: ${allRecords.length}`)
+    const allRecords = await fetchAllRecords(resourceId);
+    console.log(`📦 Total fetched: ${allRecords.length}`);
 
-    const locations = deduplicateLocations(allRecords)
-    console.log(`✅ Total locations after deduplication: ${locations.length}`)
+    const locations = deduplicateLocations(allRecords);
+    console.log(`✅ Total locations after deduplication: ${locations.length}`);
 
-    const { idMap, inserted: locInserted, alreadyExists: locExisting } = await insertLocations(client, locations);
-    const { totalInserted, totalUpdated, totalSkipped, totalExisting} = await insertPrograms(client, locations, idMap)
-    
+    const { idMap, inserted, alreadyExists } = await insertLocations(client, locations);
+    const { totalInserted, totalUpdated, totalSkipped } = await insertPrograms(client, locations, idMap);
+
     await client.query(`
       INSERT INTO shelter_metadata (id, last_refreshed)
       VALUES (1, NOW())
-      ON CONFLICT (id) DO UPDATE SET last_refreshed = EXCLUDED.last_refreshed
-    `)
+      ON CONFLICT (id) DO UPDATE SET last_refreshed = EXCLUDED.last_refreshed;
+    `);
 
-console.log('🎉 Seeding complete! Summary:')
-console.log(`  Locations inserted: ${locInserted}`)
-console.log(`  Locations already existed: ${locExisting}`)
-console.log(`  Programs inserted: ${totalInserted}`)
-console.log(`  Programs updated: ${totalUpdated}`)
-console.log(`  Programs already existed: ${totalExisting}`)
-console.log(`  Programs skipped (missing name): ${totalSkipped}`)
+    console.log('🎉 Seeding complete! Summary:');
+    console.log(`  Locations inserted: ${inserted}`);
+    console.log(`  Locations already existed: ${alreadyExists}`);
+    console.log(`  Programs inserted: ${totalInserted}`);
+    console.log(`  Programs updated: ${totalUpdated}`);
+    console.log(`  Programs skipped (missing name): ${totalSkipped}`);
+
   } catch (err) {
-    console.error('❌ Error seeding locations:', err)
+    console.error('❌ Error seeding locations:', err);
   } finally {
-    client.release()
-    await pool.end()
+    client.release();
+    await pool.end();
   }
 }
 
-module.exports = { seedLocationsFromAPI }
+module.exports = { seedLocationsFromAPI };
 
 if (require.main === module) {
-  seedLocationsFromAPI()
+  seedLocationsFromAPI();
 }
