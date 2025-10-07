@@ -6,24 +6,25 @@ const PACKAGE_ID = '21c83b32-d5a8-4106-a54f-010dbe49f6f2'
 const BATCH_SIZE = 500
 
 function normalizeRecord(r) {
-  if (!r._id) return null
+  if (!r._id) return null;
+
   return {
     id: r._id,
     shelter_id: r.SHELTER_ID || null,
     organization_name: r.ORGANIZATION_NAME || null,
     shelter_group: r.SHELTER_GROUP || null,
-    location_name: r.LOCATION_NAME || null,
-    address: r.LOCATION_ADDRESS || null,
-    postal_code: r.LOCATION_POSTAL_CODE || null,
-    city: r.LOCATION_CITY || null,
-    province: r.LOCATION_PROVINCE || null,
+    location_name: r.LOCATION_NAME?.trim() || null,
+    address: r.LOCATION_ADDRESS?.trim() || null,
+    postal_code: r.LOCATION_POSTAL_CODE?.trim() || null,
+    city: r.LOCATION_CITY?.trim() || null,
+    province: r.LOCATION_PROVINCE?.trim() || null,
     latitude: r.LATITUDE ? parseFloat(r.LATITUDE) : null,
     longitude: r.LONGITUDE ? parseFloat(r.LONGITUDE) : null,
     programs: [{
       id: r._id,
-      program_name: r.PROGRAM_NAME || null,
-      sector: r.SECTOR || null,
-      overnight_service_type: r.OVERNIGHT_SERVICE_TYPE || null,
+      program_name: r.PROGRAM_NAME?.trim() || null,
+      sector: r.SECTOR?.trim() || null,
+      overnight_service_type: r.OVERNIGHT_SERVICE_TYPE?.trim() || null,
       service_user_count: r.SERVICE_USER_COUNT ? parseInt(r.SERVICE_USER_COUNT) : null,
       capacity_actual_bed: r.CAPACITY_ACTUAL_BED ? parseInt(r.CAPACITY_ACTUAL_BED) : null,
       capacity_actual_room: r.CAPACITY_ACTUAL_ROOM ? parseInt(r.CAPACITY_ACTUAL_ROOM) : null,
@@ -33,32 +34,24 @@ function normalizeRecord(r) {
       unoccupied_rooms: r.UNOCCUPIED_ROOMS ? parseInt(r.UNOCCUPIED_ROOMS) : null,
       occupancy_date: r.OCCUPANCY_DATE || null
     }]
-  }
+  };
 }
 function deduplicateLocations(records) {
   const locationMap = new Map();
 
   for (const r of records) {
-    // Skip completely invalid records
-    if (!r.location_name && !r.address) continue;
+    if (!r.location_name || !r.address) continue;
 
-    // Normalize string fields safely
-    const location_name = r.location_name?.toString().trim() || '';
-    const address = r.address?.toString().trim() || '';
-    const city = r.city?.toString().trim() || '';
-    const province = r.province?.toString().trim() || '';
-
-    if (!location_name || !address) continue; // still require essential fields
-
-    const key = `${location_name}||${address}||${city}||${province}`.toLowerCase();
+    // Use trimmed values as key, preserving capitalization
+    const key = `${r.location_name.trim()}||${r.address.trim()}||${r.city?.trim()}||${r.province?.trim()}`;
 
     if (!locationMap.has(key)) {
-      locationMap.set(key, {
-        ...r,
-        location_name,
-        address,
-        city,
-        province,
+      locationMap.set(key, { 
+        ...r, 
+        location_name: r.location_name.trim(),
+        address: r.address.trim(),
+        city: r.city?.trim(),
+        province: r.province?.trim(),
         programs: [...r.programs]
       });
     } else {
@@ -90,15 +83,14 @@ async function fetchAllRecords(resourceId) {
 }
 
 async function insertLocations(client, locations) {
-  if (!locations.length) return { idMap: new Map(), inserted: 0, alreadyExists: 0 };
+  if (!locations.length) return new Map();
 
-  // Normalize for insertion
   const normalizedLocations = locations.map(l => ({
-    location_name: l.location_name?.trim().toLowerCase(),
-    address: l.address?.trim().toLowerCase(),
+    location_name: l.location_name?.trim(),
+    address: l.address?.trim(),
     postal_code: l.postal_code?.trim() || null,
-    city: l.city?.trim().toLowerCase(),
-    province: l.province?.trim().toLowerCase(),
+    city: l.city?.trim(),
+    province: l.province?.trim(),
     latitude: l.latitude || null,
     longitude: l.longitude || null,
     programs: l.programs || []
@@ -132,40 +124,22 @@ async function insertLocations(client, locations) {
     idMap.set(key, r.id);
   });
 
-  // Identify pre-existing locations (not returned by INSERT)
-  const preExistingKeys = normalizedLocations
-    .map(l => `${l.location_name}||${l.address}||${l.city}||${l.province}`)
-    .filter(key => !idMap.has(key));
+  // Map pre-existing locations not returned by RETURNING
+  normalizedLocations.forEach(l => {
+    const key = `${l.location_name}||${l.address}||${l.city}||${l.province}`;
+    if (!idMap.has(key)) idMap.set(key, null); 
+  });
 
-  if (preExistingKeys.length) {
-    const placeholders = preExistingKeys.map((_, i) => `$${i + 1}`).join(',');
-    const fetchQuery = `
-      SELECT id, location_name, address, city, province
-      FROM locations
-      WHERE (location_name || '||' || address || '||' || city || '||' || province) IN (${placeholders})
-    `;
-    const fetchRes = await client.query(fetchQuery, preExistingKeys);
-    fetchRes.rows.forEach(r => {
-      const key = `${r.location_name}||${r.address}||${r.city}||${r.province}`;
-      idMap.set(key, r.id);
-    });
-  }
-
-  const insertedCount = res.rows.length;
-  const alreadyExistsCount = locations.length - insertedCount;
-
-  return { idMap, inserted: insertedCount, alreadyExists: alreadyExistsCount };
+  return idMap;
 }
 async function insertPrograms(client, locations, idMap) {
   let totalInserted = 0;
   let totalUpdated = 0;
-  let totalSkipped = 0;      // missing name
-    let totalExisting = 0;
+  let totalSkipped = 0;
   const programs = [];
 
-  // Step 1: Deduplicate and normalize programs per location
   locations.forEach(loc => {
-    const locKey = `${loc.location_name}||${loc.address}||${loc.city}||${loc.province}`.toLowerCase();
+    const locKey = `${loc.location_name}||${loc.address}||${loc.city}||${loc.province}`;
     const locId = idMap.get(locKey);
     if (!locId) return;
 
@@ -176,40 +150,41 @@ async function insertPrograms(client, locations, idMap) {
         totalSkipped++;
         return;
       }
-
-      const key = `${locId}||${p.program_name?.trim().toLowerCase()}`;
-
-      const normalizedProgram = {
-        program_name: p.program_name?.trim() || null,
-        sector: p.sector?.trim() || null,
-        overnight_service_type: p.overnight_service_type?.trim() || null,
-        service_user_count: p.service_user_count != null ? p.service_user_count : null,
-        capacity_actual_bed: p.capacity_actual_bed != null ? p.capacity_actual_bed : null,
-        occupied_beds: p.occupied_beds != null ? p.occupied_beds : null,
-        unoccupied_beds: p.unoccupied_beds != null ? p.unoccupied_beds : null,
-        capacity_actual_room: p.capacity_actual_room != null ? p.capacity_actual_room : null,
-        occupied_rooms: p.occupied_rooms != null ? p.occupied_rooms : null,
-        unoccupied_rooms: p.unoccupied_rooms != null ? p.unoccupied_rooms : null,
-        occupancy_date: p.occupancy_date || null
-      };
+      const key = `${locId}||${p.program_name?.trim()}`; // use exact casing
 
       if (!programMap.has(key)) {
-        programMap.set(key, normalizedProgram);
+        programMap.set(key, { ...p });
       } else {
-        // merge numeric fields (use latest non-null)
         const existing = programMap.get(key);
-        Object.keys(normalizedProgram).forEach(field => {
-          if (normalizedProgram[field] != null) {
-            existing[field] = normalizedProgram[field];
-          }
-        });
+        existing.service_user_count = p.service_user_count ?? existing.service_user_count;
+        existing.capacity_actual_bed = p.capacity_actual_bed ?? existing.capacity_actual_bed;
+        existing.occupied_beds = p.occupied_beds ?? existing.occupied_beds;
+        existing.unoccupied_beds = p.unoccupied_beds ?? existing.unoccupied_beds;
+        existing.capacity_actual_room = p.capacity_actual_room ?? existing.capacity_actual_room;
+        existing.occupied_rooms = p.occupied_rooms ?? existing.occupied_rooms;
+        existing.unoccupied_rooms = p.unoccupied_rooms ?? existing.unoccupied_rooms;
+        existing.occupancy_date = p.occupancy_date ?? existing.occupancy_date;
       }
     });
 
-    programMap.forEach(p => programs.push([...Object.values(p), locId]));
+    programMap.forEach(p => {
+      programs.push([
+        p.program_name?.trim() || null,
+        p.sector?.trim() || null,
+        p.overnight_service_type?.trim() || null,
+        p.service_user_count ?? null,
+        p.capacity_actual_bed ?? null,
+        p.occupied_beds ?? null,
+        p.unoccupied_beds ?? null,
+        p.capacity_actual_room ?? null,
+        p.occupied_rooms ?? null,
+        p.unoccupied_rooms ?? null,
+        p.occupancy_date || null,
+        locId
+      ]);
+    });
   });
 
-  // Step 2: Insert/update in batches
   for (let i = 0; i < programs.length; i += BATCH_SIZE) {
     const batch = programs.slice(i, i + BATCH_SIZE);
     const placeholders = batch.map(
@@ -234,34 +209,15 @@ async function insertPrograms(client, locations, idMap) {
         occupied_rooms = EXCLUDED.occupied_rooms,
         unoccupied_rooms = EXCLUDED.unoccupied_rooms,
         occupancy_date = EXCLUDED.occupancy_date
-      WHERE
-        programs.sector IS DISTINCT FROM EXCLUDED.sector OR
-        programs.overnight_service_type IS DISTINCT FROM EXCLUDED.overnight_service_type OR
-        programs.service_user_count IS DISTINCT FROM EXCLUDED.service_user_count OR
-        programs.capacity_actual_bed IS DISTINCT FROM EXCLUDED.capacity_actual_bed OR
-        programs.occupied_beds IS DISTINCT FROM EXCLUDED.occupied_beds OR
-        programs.unoccupied_beds IS DISTINCT FROM EXCLUDED.unoccupied_beds OR
-        programs.capacity_actual_room IS DISTINCT FROM EXCLUDED.capacity_actual_room OR
-        programs.occupied_rooms IS DISTINCT FROM EXCLUDED.occupied_rooms OR
-        programs.unoccupied_rooms IS DISTINCT FROM EXCLUDED.unoccupied_rooms OR
-        programs.occupancy_date IS DISTINCT FROM EXCLUDED.occupancy_date
       RETURNING xmax;
     `;
 
     const values = batch.flat();
     const res = await client.query(queryText, values);
-
-    res.rows.forEach(r => {
-      if (r.xmax === '0') {
-        totalInserted++;
-      } else if (r.xmax === '1') {
-        totalUpdated++;
-      }              
-    });
+    res.rows.forEach(r => (r.xmax === '0' ? totalInserted++ : totalUpdated++));
   }
 
-totalExisting = programs.length - totalInserted - totalUpdated - totalSkipped;
-return { totalInserted, totalUpdated, totalSkipped, totalExisting };
+  return { totalInserted, totalUpdated, totalSkipped };
 }
 async function seedLocationsFromAPI() {
   const client = await pool.connect()
