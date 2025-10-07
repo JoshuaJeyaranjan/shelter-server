@@ -1,41 +1,56 @@
-const https = require("https");
+const axios = require('axios')
+const packageId = '21c83b32-d5a8-4106-a54f-010dbe49f6f2'
 
-const packageId = "21c83b32-d5a8-4106-a54f-010dbe49f6f2";
+async function fetchDatasetMetadata(packageId) {
+  try {
+    // 1️⃣ Fetch dataset info (this contains all resources)
+    const { data: pkgData } = await axios.get(
+      `https://ckan0.cf.opendata.inter.prod-toronto.ca/api/3/action/package_show?id=${packageId}`
+    );
 
-// Fetch package metadata
-https.get(
-  `https://ckan0.cf.opendata.inter.prod-toronto.ca/api/3/action/package_show?id=${packageId}`,
-  (response) => {
-    let dataChunks = [];
+    if (!pkgData.success) {
+      throw new Error("Failed to fetch package metadata from CKAN");
+    }
 
-    response.on("data", (chunk) => {
-      dataChunks.push(chunk);
-    });
+    const dataset = pkgData.result;
+    const resources = dataset.resources.filter(r => r.datastore_active);
+    if (!resources.length) {
+      throw new Error("No active datastore resources found in package");
+    }
 
-    response.on("end", () => {
-      const data = Buffer.concat(dataChunks).toString();
-      const pkg = JSON.parse(data)["result"];
-      console.log("Package name:", pkg.name);
-      console.log("Number of resources:", pkg.resources.length);
+    // Take the first active datastore resource (the one you're already using)
+    const resource = resources[0];
 
-      // Fetch the first datastore resource
-      const datastoreResource = pkg.resources.find((r) => r.datastore_active);
-      if (!datastoreResource) {
-        console.log("No active datastore resource found.");
-        return;
-      }
+    // 2️⃣ Fetch record count + basic stats from datastore
+    const { data: storeData } = await axios.get(
+      "https://ckan0.cf.opendata.inter.prod-toronto.ca/api/3/action/datastore_search",
+      { params: { id: resource.id, limit: 1 } }
+    );
 
-      https.get(
-        `https://ckan0.cf.opendata.inter.prod-toronto.ca/api/3/action/datastore_search?id=${datastoreResource.id}&limit=5`,
-        (res) => {
-          let chunks = [];
-          res.on("data", (chunk) => chunks.push(chunk));
-          res.on("end", () => {
-            const records = JSON.parse(Buffer.concat(chunks).toString())["result"]["records"];
-            console.log("Sample records:", records);
-          });
-        }
-      ).on("error", (err) => console.error("Error fetching resource data:", err));
-    });
+    const totalRecords = storeData.result.total;
+    const lastModified = resource.last_modified || dataset.metadata_modified;
+    const created = resource.created || dataset.metadata_created;
+
+    console.log("\n📦 **Dataset Metadata**");
+    console.log(`  📘 Title: ${dataset.title}`);
+    console.log(`  🌐 Resource ID: ${resource.id}`);
+    console.log(`  🕐 Created: ${created}`);
+    console.log(`  🔁 Last Modified: ${lastModified}`);
+    console.log(`  🧮 Total Records Available: ${totalRecords}`);
+    console.log(`  🔗 Resource URL: ${resource.url}\n`);
+
+    return {
+      title: dataset.title,
+      resourceId: resource.id,
+      lastModified,
+      totalRecords,
+      created,
+      resourceUrl: resource.url
+    };
+  } catch (err) {
+    console.error("❌ Error fetching dataset metadata:", err.message);
+    return null;
   }
-).on("error", (err) => console.error("Error fetching package metadata:", err));
+}
+
+fetchDatasetMetadata(packageId)
