@@ -1,5 +1,5 @@
 require("dotenv").config();
-const { seedLocations } = require("../seedLocationsFromApi");
+const { seedLocations } = require("../seedLocationsApi");
 const { seedProgramsFromDB } = require("../seedProgramsApi");
 
 async function runJob() {
