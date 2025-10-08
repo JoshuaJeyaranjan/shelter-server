@@ -1,17 +1,37 @@
 require("dotenv").config();
-const { seedLocationsFromAPI } = require("../seedLocationsFromApi");
+const { seedLocationsApi } = require("../seedLocationsFromApi");
+const { seedProgramsApi } = require("../seedProgramsApi");
 
 async function runJob() {
-  console.log("🌐 Starting shelter refresh job...");
+  console.log("🌐 Starting shelter & program refresh job...");
 
+  let failed = false;
+
+  // Step 1: Refresh shelter locations
   try {
-    await seedLocationsFromAPI();
-    console.log("✅ Shelter data refreshed successfully!");
+    console.log("🚀 Refreshing shelter locations...");
+    await seedLocationsApi();
+    console.log("✅ Shelter locations refreshed successfully!");
   } catch (err) {
-    console.error("❌ Error during shelter refresh:", err);
+    failed = true;
+    console.error("❌ Error refreshing shelter locations:", err);
+  }
+
+  // Step 2: Seed programs
+  try {
+    console.log("🚀 Seeding program data...");
+    await seedProgramsApi();
+    console.log("✅ Program data seeded successfully!");
+  } catch (err) {
+    failed = true;
+    console.error("❌ Error seeding program data:", err);
+  }
+
+  console.log("🌐 Job finished.");
+
+  if (failed) {
     process.exit(1); // indicate failure to Render
-  } finally {
-    console.log("🌐 Job finished.");
+  } else {
     process.exit(0); // exit cleanly
   }
 }
