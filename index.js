@@ -16,6 +16,17 @@ app.use(morgan("dev"));
 // Routes
 app.use("/locations", shelterRoutes);
 
+app.get('/debug/db', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT NOW()');
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'DB connection failed' });
+  }
+});
+
+
 app.get("/", (req, res) => {
   res.send("Toronto Shelters API is running!");
 });
