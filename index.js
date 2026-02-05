@@ -7,6 +7,7 @@ const shelterRoutes = require("./routes/shelters");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const pool = require("./config/db");
 
 // Middleware
 app.use(cors());
