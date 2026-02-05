@@ -7,9 +7,9 @@ exports.getAllLocations = async (req, res, next) => {
 
     // Fetch locations
     const locationsResult = await pool.query(
-      "SELECT * FROM locations WHERE address IS NOT NULL" +
+      "SELECT id, location_name, address, city, province, last_refreshed FROM locations WHERE address IS NOT NULL" +
         (city ? " AND city = $1" : ""),
-      city ? [city] : [],
+      city ? [city] : []
     );
     const locations = locationsResult.rows;
 
@@ -17,8 +17,7 @@ exports.getAllLocations = async (req, res, next) => {
 
     // Fetch all programs for these locations
     const locationIds = locations.map((l) => l.id);
-    let programQuery =
-      "SELECT * FROM programs WHERE location_id = ANY($1::int[])";
+    let programQuery = "SELECT * FROM programs WHERE location_id = ANY($1::int[])";
     const programParams = [locationIds];
 
     // Optional filters
@@ -30,13 +29,13 @@ exports.getAllLocations = async (req, res, next) => {
     if (minVacancyBeds) {
       programParams.push(Number(minVacancyBeds));
       programConditions.push(
-        `(capacity_actual_bed - COALESCE(occupied_beds,0)) >= $${programParams.length}`,
+        `(capacity_actual_bed - COALESCE(occupied_beds,0)) >= $${programParams.length}`
       );
     }
     if (minVacancyRooms) {
       programParams.push(Number(minVacancyRooms));
       programConditions.push(
-        `(capacity_actual_room - COALESCE(occupied_rooms,0)) >= $${programParams.length}`,
+        `(capacity_actual_room - COALESCE(occupied_rooms,0)) >= $${programParams.length}`
       );
     }
 
@@ -68,7 +67,7 @@ exports.getLocationById = async (req, res, next) => {
 
     const locationResult = await pool.query(
       "SELECT * FROM locations WHERE id = $1 AND address IS NOT NULL",
-      [id],
+      [id]
     );
     if (!locationResult.rows.length)
       return res.status(404).json({ message: "Location not found" });
@@ -77,7 +76,7 @@ exports.getLocationById = async (req, res, next) => {
 
     const programsResult = await pool.query(
       "SELECT * FROM programs WHERE location_id = $1",
-      [id],
+      [id]
     );
 
     res.json({ ...location, programs: programsResult.rows });
@@ -93,7 +92,7 @@ exports.getLocationOccupancy = async (req, res, next) => {
 
     const locationResult = await pool.query(
       "SELECT * FROM locations WHERE id = $1",
-      [id],
+      [id]
     );
     if (!locationResult.rows.length)
       return res.status(404).json({ message: "Location not found" });
@@ -101,8 +100,9 @@ exports.getLocationOccupancy = async (req, res, next) => {
 
     const programsResult = await pool.query(
       "SELECT * FROM programs WHERE location_id = $1",
-      [id],
+      [id]
     );
+
     const programs = programsResult.rows.map((p) => ({
       id: p.id,
       program_name: p.program_name,
@@ -137,24 +137,9 @@ exports.getLocationOccupancy = async (req, res, next) => {
 exports.getLocationsForMap = async (req, res, next) => {
   try {
     const result = await pool.query(
-      "SELECT * FROM locations WHERE address IS NOT NULL",
+      "SELECT id, location_name, latitude, longitude, last_refreshed FROM locations WHERE address IS NOT NULL"
     );
     res.json(result.rows);
-  } catch (err) {
-    next(err);
-  }
-};
-
-// GET /api/metadata
-exports.getSheltersMetadata = async (req, res, next) => {
-  try {
-    const result = await pool.query(
-      "SELECT * FROM shelter_metadata WHERE id = $1",
-      [1],
-    );
-    if (!result.rows[0]) return res.json({ lastRefreshed: null });
-
-    res.json({ lastRefreshed: result.rows[0].last_refreshed });
   } catch (err) {
     next(err);
   }

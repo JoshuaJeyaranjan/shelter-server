@@ -1,25 +1,24 @@
-require("dotenv").config();
-const axios = require("axios");
-const pool = require("./config/db");
+require('dotenv').config()
+const axios = require('axios')
+const pool = require('./config/db')
 
-const PACKAGE_ID = "21c83b32-d5a8-4106-a54f-010dbe49f6f2";
-const FETCH_LIMIT = 5000;
+const PACKAGE_ID = '21c83b32-d5a8-4106-a54f-010dbe49f6f2'
+const FETCH_LIMIT = 5000
 
 /**
  * Normalize a CKAN record safely
  */
-function normalizeRecord(r) {
-  if (!r._id) return null;
-
-  // Normalize strings and convert numbers
-  const toInt = (val) => (val != null && !isNaN(val) ? parseInt(val) : null);
-  const toFloat = (val) => (val != null && !isNaN(val) ? parseFloat(val) : null);
-  const clean = (val) => (typeof val === "string" ? val.trim() : val) || "";
+function normalizeRecord (r) {
+  if (!r.LOCATION_ID) return null
+  const toInt = val => (val != null && !isNaN(val) ? parseInt(val) : null)
+  const toFloat = val => (val != null && !isNaN(val) ? parseFloat(val) : null)
+  const clean = val => (typeof val === 'string' ? val.trim() : val) || ''
 
   return {
-    id: r._id,
-    shelter_id: clean(r.SHELTER_ID),
+    id: toInt(r.LOCATION_ID),
+    organization_id: toInt(r.ORGANIZATION_ID),
     organization_name: clean(r.ORGANIZATION_NAME),
+    shelter_id: toInt(r.SHELTER_ID),
     shelter_group: clean(r.SHELTER_GROUP),
     location_name: clean(r.LOCATION_NAME),
     address: clean(r.LOCATION_ADDRESS),
@@ -28,213 +27,155 @@ function normalizeRecord(r) {
     province: clean(r.LOCATION_PROVINCE),
     latitude: toFloat(r.LATITUDE),
     longitude: toFloat(r.LONGITUDE),
-    programs: [
-      {
-        id: r._id,
-        program_name: clean(r.PROGRAM_NAME),
-        sector: clean(r.SECTOR),
-        overnight_service_type: clean(r.OVERNIGHT_SERVICE_TYPE),
-        service_user_count: toInt(r.SERVICE_USER_COUNT),
-        capacity_actual_bed: toInt(r.CAPACITY_ACTUAL_BED),
-        capacity_actual_room: toInt(r.CAPACITY_ACTUAL_ROOM),
-        occupied_beds: toInt(r.OCCUPIED_BEDS),
-        unoccupied_beds: toInt(r.UNOCCUPIED_BEDS),
-        occupied_rooms: toInt(r.OCCUPIED_ROOMS),
-        unoccupied_rooms: toInt(r.UNOCCUPIED_ROOMS),
-        occupancy_date: r.OCCUPANCY_DATE || null,
-      },
-    ],
-  };
-}
-
-/**
- * Deduplicate by location_name + address (case-insensitive),
- * and merge city/province/postal_code safely.
- */
-function deduplicateLocations(records) {
-  const map = new Map();
-
-  for (const r of records) {
-    if (!r.location_name || !r.address) continue;
-
-    const key = `${r.location_name.toLowerCase()}||${r.address.toLowerCase()}`;
-
-    if (!map.has(key)) {
-      map.set(key, { ...r });
-    } else {
-      const existing = map.get(key);
-
-      // Preserve any missing but now-available fields
-      existing.city = existing.city || r.city;
-      existing.province = existing.province || r.province;
-      existing.postal_code = existing.postal_code || r.postal_code;
-
-      // Don’t overwrite lat/lon if we already have valid ones
-      existing.latitude = existing.latitude ?? r.latitude;
-      existing.longitude = existing.longitude ?? r.longitude;
-
-      // Merge programs
-      existing.programs.push(...r.programs);
-    }
+    shelter_type: clean(r.PROGRAM_MODEL),
+    population_served: clean(r.PROGRAM_AREA),
+    program_model: clean(r.PROGRAM_MODEL),
+    created_at: new Date()
   }
-
-  return Array.from(map.values());
 }
 
 /**
  * Fetch CKAN data with pagination
  */
-async function fetchAllRecords(resourceId) {
-  let offset = 0;
-  let allRecords = [];
-  let totalCount = 0;
+async function fetchAllRecords (resourceId) {
+  let offset = 0
+  let allRecords = []
+  let totalCount = 0
 
   do {
     const { data } = await axios.get(
-      "https://ckan0.cf.opendata.inter.prod-toronto.ca/api/3/action/datastore_search",
-      {
-        params: { id: resourceId, limit: FETCH_LIMIT, offset },
-      }
-    );
+      'https://ckan0.cf.opendata.inter.prod-toronto.ca/api/3/action/datastore_search',
+      { params: { id: resourceId, limit: FETCH_LIMIT, offset } }
+    )
 
-    const records = data.result.records.map(normalizeRecord).filter(Boolean);
-    allRecords = allRecords.concat(records);
-    totalCount = data.result.total;
-    offset += FETCH_LIMIT;
+    const records = data.result.records.map(normalizeRecord).filter(Boolean)
+    allRecords = allRecords.concat(records)
+    totalCount = data.result.total
+    offset += FETCH_LIMIT
 
-    console.log(`📦 Fetched ${allRecords.length} / ${totalCount} records...`);
-  } while (offset < totalCount);
+    console.log(`📦 Fetched ${allRecords.length} / ${totalCount} records...`)
+  } while (offset < totalCount)
 
-  return allRecords;
+  return allRecords
 }
 
 /**
- * Insert or update locations safely
+ * Insert or update locations
  */
-async function insertLocations(client, locations) {
-  const idMap = new Map();
-  let processed = 0;
+async function insertLocations (client, locations) {
+  let processed = 0
 
   for (const loc of locations) {
     try {
-      // Attempt insert first
-const res = await client.query(
-  `
-  INSERT INTO locations (location_name, address, postal_code, city, province, latitude, longitude)
-  VALUES ($1,$2,$3,$4,$5,$6,$7)
-  ON CONFLICT (
-    UPPER(TRIM(location_name)),
-    UPPER(TRIM(address)),
-    UPPER(TRIM(city)),
-    UPPER(TRIM(province))
-  )
-  DO UPDATE SET
-    postal_code = COALESCE(locations.postal_code, EXCLUDED.postal_code),
-    city = COALESCE(locations.city, EXCLUDED.city),
-    province = COALESCE(locations.province, EXCLUDED.province),
-    latitude = COALESCE(locations.latitude, EXCLUDED.latitude),
-    longitude = COALESCE(locations.longitude, EXCLUDED.longitude)
-  RETURNING id
-  `,
-  [
-    loc.location_name,
-    loc.address,
-    loc.postal_code || null,
-    loc.city || null,
-    loc.province || null,
-    loc.latitude,
-    loc.longitude,
-  ]
-);
-      // If insert succeeded, use returned id
-      if (res.rows[0]) {
-        idMap.set(
-          `${loc.location_name}||${loc.address}||${loc.city || ""}||${loc.province || ""}`,
-          res.rows[0].id
-        );
-      } else {
-        // Conflict happened; fetch existing id
-        const existing = await client.query(
-          `
-          SELECT id FROM locations
-          WHERE UPPER(TRIM(location_name)) = UPPER(TRIM($1))
-            AND UPPER(TRIM(address)) = UPPER(TRIM($2))
-            AND UPPER(TRIM(city)) = UPPER(TRIM($3))
-            AND UPPER(TRIM(province)) = UPPER(TRIM($4))
-          `,
-          [
-            loc.location_name,
-            loc.address,
-            loc.city || "Unknown",
-            loc.province || "Unknown",
-          ]
-        );
-        if (existing.rows[0]) {
-          idMap.set(
-            `${loc.location_name}||${loc.address}||${loc.city || ""}||${loc.province || ""}`,
-            existing.rows[0].id
-          );
-        } else {
-          console.warn(
-            "⚠️ Could not find or insert location:",
-            loc.location_name
-          );
-        }
-      }
-
-      processed++;
+      await client.query(
+        `
+        INSERT INTO locations (
+          id, organization_id, organization_name, shelter_id, shelter_group,
+          location_name, address, postal_code, city, province,
+          latitude, longitude, shelter_type, population_served, program_model, created_at
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+        ON CONFLICT (id) DO UPDATE SET
+          organization_id = EXCLUDED.organization_id,
+          organization_name = EXCLUDED.organization_name,
+          shelter_id = EXCLUDED.shelter_id,
+          shelter_group = EXCLUDED.shelter_group,
+          location_name = EXCLUDED.location_name,
+          address = EXCLUDED.address,
+          postal_code = EXCLUDED.postal_code,
+          city = EXCLUDED.city,
+          province = EXCLUDED.province,
+          latitude = EXCLUDED.latitude,
+          longitude = EXCLUDED.longitude,
+          shelter_type = EXCLUDED.shelter_type,
+          population_served = EXCLUDED.population_served,
+          program_model = EXCLUDED.program_model,
+          created_at = EXCLUDED.created_at
+        `,
+        [
+          loc.id,
+          loc.organization_id,
+          loc.organization_name,
+          loc.shelter_id,
+          loc.shelter_group,
+          loc.location_name,
+          loc.address,
+          loc.postal_code,
+          loc.city,
+          loc.province,
+          loc.latitude,
+          loc.longitude,
+          loc.shelter_type,
+          loc.population_served,
+          loc.program_model,
+          loc.created_at
+        ]
+      )
+      await client.query(
+        `UPDATE locations
+   SET last_refreshed = NOW()
+   WHERE id = $1`,
+        [loc.id]
+      )
+      processed++
     } catch (err) {
-      console.error("❌ Error inserting location:", loc.location_name, err.message);
+      console.error(
+        '❌ Error inserting location:',
+        loc.location_name,
+        err.message
+      )
     }
   }
 
-  console.log(`✅ Locations processed: ${processed} / ${locations.length}`);
-  return idMap;
+  console.log(`✅ Locations processed: ${processed} / ${locations.length}`)
 }
+
 /**
- * Main seeding entry point
+ * Main seed function
  */
-async function seedLocations() {
-  const client = await pool.connect();
+async function seedLocations () {
+  const client = await pool.connect()
   try {
-    console.log("🌐 Connecting to database...");
+    console.log('🌐 Connecting to database...')
 
     const { data: pkgData } = await axios.get(
       `https://ckan0.cf.opendata.inter.prod-toronto.ca/api/3/action/package_show?id=${PACKAGE_ID}`
-    );
+    )
 
-    const resources = pkgData.result.resources.filter((r) => r.datastore_active);
-    if (!resources.length) throw new Error("No active datastore resources found");
+    const resources = pkgData.result.resources.filter(r => r.datastore_active)
+    if (!resources.length)
+      throw new Error('No active datastore resources found')
 
-    const resourceId = resources[0].id;
-    const allRecords = await fetchAllRecords(resourceId);
+    const resourceId = resources[0].id
+    const allRecords = await fetchAllRecords(resourceId)
 
-    console.log(`📦 Total fetched: ${allRecords.length}`);
-    const locations = deduplicateLocations(allRecords);
-    console.log(`✅ After deduplication: ${locations.length} unique locations`);
+    console.log(`📦 Total fetched: ${allRecords.length}`)
+    const locations = allRecords // no dedup needed, CKAN LOCATION_ID is unique
+    console.log(`✅ Locations ready to insert: ${locations.length}`)
 
-    const idMap = await insertLocations(client, locations);
+    await insertLocations(client, locations)
 
-    // Metadata update
+    // Update shelter metadata
     await client.query(`
-      INSERT INTO shelter_metadata (id, last_refreshed)
-      VALUES (1, NOW())
-      ON CONFLICT (id) DO UPDATE SET last_refreshed = EXCLUDED.last_refreshed
-    `);
+  INSERT INTO shelter_metadata (id, last_refreshed)
+  VALUES (1, NOW())
+  ON CONFLICT (id) DO UPDATE 
+    SET last_refreshed = EXCLUDED.last_refreshed
+`)
 
-    console.log("🎉 Location seeding complete!");
-    return idMap;
+    console.log('🎉 Shelter metadata updated!')
+
+    console.log('🎉 Location seeding complete!')
   } catch (err) {
-    console.error("❌ Error seeding locations:", err);
-    throw err;
+    console.error('❌ Error seeding locations:', err)
   } finally {
-    client.release();
+    client.release()
   }
 }
 
 // Run standalone
 if (require.main === module) {
-  seedLocations().catch((err) => console.error(err));
+  seedLocations().catch(err => console.error(err))
 }
 
-module.exports = { seedLocations };
+module.exports = { seedLocations }
