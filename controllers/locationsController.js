@@ -6,11 +6,23 @@ exports.getAllLocations = async (req, res, next) => {
     const { sector, city, minVacancyBeds, minVacancyRooms } = req.query;
 
     // Fetch locations
-    const locationsResult = await pool.query(
-      "SELECT id, location_name, address, city, province, last_refreshed FROM locations WHERE address IS NOT NULL" +
-        (city ? " AND city = $1" : ""),
-      city ? [city] : []
-    );
+const locationsResult = await pool.query(
+  `
+  SELECT
+    id,
+    location_name,
+    address,
+    city,
+    province,
+    latitude,
+    longitude,
+    last_refreshed
+  FROM locations
+  WHERE address IS NOT NULL
+  ${city ? "AND city = $1" : ""}
+  `,
+  city ? [city] : []
+);
     const locations = locationsResult.rows;
 
     if (!locations.length) return res.json({ locations: [] });
