@@ -161,6 +161,7 @@ exports.getLocationsForMap = async (req, res, next) => {
         latitude,
         longitude,
         shelter_type,
+        organization_name,
         last_refreshed
       FROM locations
       WHERE address IS NOT NULL
