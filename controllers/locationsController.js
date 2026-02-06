@@ -16,6 +16,7 @@ const locationsResult = await pool.query(
     province,
     latitude,
     longitude,
+    shelter_type,
     last_refreshed
   FROM locations
   WHERE address IS NOT NULL
@@ -158,6 +159,7 @@ exports.getLocationsForMap = async (req, res, next) => {
         province,
         latitude,
         longitude,
+        shelter_type,
         last_refreshed
       FROM locations
       WHERE address IS NOT NULL
