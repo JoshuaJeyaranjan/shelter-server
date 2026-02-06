@@ -136,10 +136,56 @@ exports.getLocationOccupancy = async (req, res, next) => {
 // GET /api/locations/map
 exports.getLocationsForMap = async (req, res, next) => {
   try {
-    const result = await pool.query(
-      "SELECT id, location_name, latitude, longitude, last_refreshed FROM locations WHERE address IS NOT NULL"
+    // 1️⃣ Fetch all locations with their lat/lng and address info
+    const locationsResult = await pool.query(`
+      SELECT
+        id,
+        location_name,
+        address,
+        city,
+        province,
+        latitude,
+        longitude,
+        last_refreshed
+      FROM locations
+      WHERE address IS NOT NULL
+    `);
+
+    const locations = locationsResult.rows;
+
+    // 2️⃣ Fetch all programs
+    const programsResult = await pool.query(`
+      SELECT
+        id,
+        location_id,
+        program_name,
+        sector,
+        capacity_actual_bed,
+        occupied_beds,
+        capacity_actual_room,
+        occupied_rooms,
+        occupancy_date
+      FROM programs
+    `);
+
+    const programs = programsResult.rows;
+
+    // 3️⃣ Merge programs into their corresponding locations
+    const locationsWithPrograms = locations.map((loc) => ({
+      ...loc,
+      programs: programs.filter((p) => p.location_id === loc.id),
+    }));
+
+    // 4️⃣ Optional: filter out any locations that somehow have no lat/lng
+    const validLocations = locationsWithPrograms.filter(
+      (loc) =>
+        loc.latitude !== null &&
+        loc.latitude !== undefined &&
+        loc.longitude !== null &&
+        loc.longitude !== undefined
     );
-    res.json(result.rows);
+
+    res.json(validLocations);
   } catch (err) {
     next(err);
   }

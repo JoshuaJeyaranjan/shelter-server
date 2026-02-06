@@ -7,31 +7,30 @@ const FETCH_LIMIT = 5000
 
 /**
  * Normalize a CKAN record safely
+ * Note: Latitude and longitude are intentionally omitted
  */
 function normalizeRecord (r) {
   if (!r.LOCATION_ID) return null
   const toInt = val => (val != null && !isNaN(val) ? parseInt(val) : null)
-  const toFloat = val => (val != null && !isNaN(val) ? parseFloat(val) : null)
   const clean = val => (typeof val === 'string' ? val.trim() : val) || ''
 
   return {
-    id: toInt(r.LOCATION_ID),
-    organization_id: toInt(r.ORGANIZATION_ID),
-    organization_name: clean(r.ORGANIZATION_NAME),
-    shelter_id: toInt(r.SHELTER_ID),
-    shelter_group: clean(r.SHELTER_GROUP),
-    location_name: clean(r.LOCATION_NAME),
-    address: clean(r.LOCATION_ADDRESS),
-    postal_code: clean(r.LOCATION_POSTAL_CODE),
-    city: clean(r.LOCATION_CITY),
-    province: clean(r.LOCATION_PROVINCE),
-    latitude: toFloat(r.LATITUDE),
-    longitude: toFloat(r.LONGITUDE),
-    shelter_type: clean(r.PROGRAM_MODEL),
-    population_served: clean(r.PROGRAM_AREA),
-    program_model: clean(r.PROGRAM_MODEL),
-    created_at: new Date()
-  }
+  id: toInt(r.LOCATION_ID),
+  organization_id: toInt(r.ORGANIZATION_ID),
+  organization_name: clean(r.ORGANIZATION_NAME),
+  shelter_id: toInt(r.SHELTER_ID),
+  shelter_group: clean(r.SHELTER_GROUP),
+  location_name: clean(r.LOCATION_NAME),
+  address: clean(r.LOCATION_ADDRESS),
+  postal_code: clean(r.LOCATION_POSTAL_CODE),
+  city: clean(r.LOCATION_CITY),
+  province: clean(r.LOCATION_PROVINCE),
+  shelter_type: clean(r.PROGRAM_MODEL),
+  population_served: clean(r.PROGRAM_AREA),
+  program_model: clean(r.PROGRAM_MODEL),
+  sector: clean(r.SECTOR), // <-- temporary addition
+  created_at: new Date()
+}
 }
 
 /**
@@ -61,6 +60,7 @@ async function fetchAllRecords (resourceId) {
 
 /**
  * Insert or update locations
+ * Latitude/longitude are intentionally omitted so manual data is preserved
  */
 async function insertLocations (client, locations) {
   let processed = 0
@@ -69,28 +69,27 @@ async function insertLocations (client, locations) {
     try {
       await client.query(
         `
-        INSERT INTO locations (
-          id, organization_id, organization_name, shelter_id, shelter_group,
-          location_name, address, postal_code, city, province,
-          latitude, longitude, shelter_type, population_served, program_model, created_at
-        )
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
-        ON CONFLICT (id) DO UPDATE SET
-          organization_id = EXCLUDED.organization_id,
-          organization_name = EXCLUDED.organization_name,
-          shelter_id = EXCLUDED.shelter_id,
-          shelter_group = EXCLUDED.shelter_group,
-          location_name = EXCLUDED.location_name,
-          address = EXCLUDED.address,
-          postal_code = EXCLUDED.postal_code,
-          city = EXCLUDED.city,
-          province = EXCLUDED.province,
-          latitude = EXCLUDED.latitude,
-          longitude = EXCLUDED.longitude,
-          shelter_type = EXCLUDED.shelter_type,
-          population_served = EXCLUDED.population_served,
-          program_model = EXCLUDED.program_model,
-          created_at = EXCLUDED.created_at
+INSERT INTO locations (
+  id, organization_id, organization_name, shelter_id, shelter_group,
+  location_name, address, postal_code, city, province,
+  shelter_type, population_served, program_model, sector, created_at
+)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+ON CONFLICT (id) DO UPDATE SET
+  organization_id = EXCLUDED.organization_id,
+  organization_name = EXCLUDED.organization_name,
+  shelter_id = EXCLUDED.shelter_id,
+  shelter_group = EXCLUDED.shelter_group,
+  location_name = EXCLUDED.location_name,
+  address = EXCLUDED.address,
+  postal_code = EXCLUDED.postal_code,
+  city = EXCLUDED.city,
+  province = EXCLUDED.province,
+  shelter_type = EXCLUDED.shelter_type,
+  population_served = EXCLUDED.population_served,
+  program_model = EXCLUDED.program_model,
+  sector = EXCLUDED.sector,
+  created_at = EXCLUDED.created_at
         `,
         [
           loc.id,
@@ -103,18 +102,17 @@ async function insertLocations (client, locations) {
           loc.postal_code,
           loc.city,
           loc.province,
-          loc.latitude,
-          loc.longitude,
           loc.shelter_type,
           loc.population_served,
           loc.program_model,
+          loc.sector,
           loc.created_at
         ]
       )
       await client.query(
         `UPDATE locations
-   SET last_refreshed = NOW()
-   WHERE id = $1`,
+         SET last_refreshed = NOW() AT TIME ZONE 'America/Toronto'
+         WHERE id = $1`,
         [loc.id]
       )
       processed++
@@ -150,21 +148,20 @@ async function seedLocations () {
     const allRecords = await fetchAllRecords(resourceId)
 
     console.log(`📦 Total fetched: ${allRecords.length}`)
-    const locations = allRecords // no dedup needed, CKAN LOCATION_ID is unique
+    const locations = allRecords
     console.log(`✅ Locations ready to insert: ${locations.length}`)
 
     await insertLocations(client, locations)
 
     // Update shelter metadata
     await client.query(`
-  INSERT INTO shelter_metadata (id, last_refreshed)
-  VALUES (1, NOW())
-  ON CONFLICT (id) DO UPDATE 
-    SET last_refreshed = EXCLUDED.last_refreshed
-`)
+      INSERT INTO shelter_metadata (id, last_refreshed)
+      VALUES (1, NOW())
+      ON CONFLICT (id) DO UPDATE 
+        SET last_refreshed = EXCLUDED.last_refreshed
+    `)
 
     console.log('🎉 Shelter metadata updated!')
-
     console.log('🎉 Location seeding complete!')
   } catch (err) {
     console.error('❌ Error seeding locations:', err)
