@@ -1,40 +1,37 @@
 require("dotenv").config();
+
 const { seedLocations } = require("../seedLocationsApi");
-const { seedProgramsFromDB } = require("../seedProgramsApi");
+const { seedProgramsFromAPI } = require("../seedProgramsApi");
 
 async function runJob() {
-  console.log("🌐 Starting shelter & program refresh job...");
-
+  console.log("🌐 Starting CKAN shelter refresh job...");
   let failed = false;
 
-  // Step 1: Refresh shelter locations
+  // Step 1: Refresh locations
   try {
-    console.log("🚀 Refreshing shelter locations...");
+    console.log("📍 Refreshing shelter locations from CKAN...");
     await seedLocations();
-    console.log("✅ Shelter locations refreshed successfully!");
+    console.log("✅ Locations refreshed successfully");
   } catch (err) {
     failed = true;
-    console.error("❌ Error refreshing shelter locations:", err);
+    console.error("❌ Location refresh failed:", err);
   }
 
-  // Step 2: Seed programs
+  // Step 2: Refresh programs (latest occupancy snapshot)
   try {
-    console.log("🚀 Seeding program data...");
-    await seedProgramsFromDB();
-    console.log("✅ Program data seeded successfully!");
+    console.log("🛏️ Refreshing program occupancy from CKAN...");
+    await seedProgramsFromAPI();
+    console.log("✅ Programs refreshed successfully");
   } catch (err) {
     failed = true;
-    console.error("❌ Error seeding program data:", err);
+    console.error("❌ Program refresh failed:", err);
   }
 
-  console.log("🌐 Job finished.");
+  console.log("🌐 CKAN refresh job finished");
 
-  if (failed) {
-    process.exit(1); // indicate failure to Render
-  } else {
-    process.exit(0); // exit cleanly
-  }
+  // Signal success/failure to Render / cron supervisor
+  process.exit(failed ? 1 : 0);
 }
 
-// Run immediately
+// Run immediately when invoked
 runJob();
