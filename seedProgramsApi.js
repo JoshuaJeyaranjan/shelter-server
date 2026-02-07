@@ -2,7 +2,7 @@ require('dotenv').config()
 const axios = require('axios')
 const pool = require('./config/db')
 
-const PACKAGE_ID = '21c83b32-d5a8-4106-a54f-010dbe49f6f2'
+const RESOURCE_ID = '42714176-4f05-44e6-b157-2b57f29b856a'
 const FETCH_LIMIT = 5000
 const BATCH_SIZE = 500
 
@@ -67,6 +67,12 @@ async function fetchAllRecords (resourceId) {
 
   return allRecords
 }
+
+
+
+
+
+
 
 /**
  * Deduplicate programs per location
@@ -181,14 +187,8 @@ async function seedProgramsFromAPI () {
   const client = await pool.connect()
   try {
     console.log('🌐 Fetching programs from CKAN...')
-    const { data: pkgData } = await axios.get(
-      `https://ckan0.cf.opendata.inter.prod-toronto.ca/api/3/action/package_show?id=${PACKAGE_ID}`
-    )
-    const resources = pkgData.result.resources.filter(r => r.datastore_active)
-    if (!resources.length)
-      throw new Error('No active datastore resources found')
 
-    const allRecords = await fetchAllRecords(resources[0].id)
+    const allRecords = await fetchAllRecords(RESOURCE_ID)
 
     if (!allRecords.length) {
       console.log('⚠️ No program records found in CKAN.')
@@ -203,6 +203,26 @@ async function seedProgramsFromAPI () {
       .reverse()[0] // newest date
 
     console.log(`📅 Latest occupancy date: ${maxDate}`)
+
+        // After fetchAllRecords
+const allDates = [
+  ...new Set(
+    allRecords.flatMap(r =>
+      r.programs.map(p => p.occupancy_date).filter(Boolean)
+    )
+  )
+].sort()
+console.log('📆 Today (UTC):', today)
+console.log('📆 Latest CKAN date:', maxDate)
+
+if (maxDate < today) {
+  console.warn(
+    '⚠️ CKAN datastore appears behind CSV. Latest date is older than today.'
+  )
+}
+
+console.log('🧪 Unique occupancy dates returned by CKAN datastore:')
+console.log(allDates.slice(-10)) // last 10 dates only
 
     // 2️⃣ Filter records for the latest date
     const latestRecords = allRecords

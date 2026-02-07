@@ -2,7 +2,7 @@ require('dotenv').config()
 const axios = require('axios')
 const pool = require('./config/db')
 
-const PACKAGE_ID = '21c83b32-d5a8-4106-a54f-010dbe49f6f2'
+const RESOURCE_ID = '42714176-4f05-44e6-b157-2b57f29b856a'
 const FETCH_LIMIT = 5000
 
 /**
@@ -136,20 +136,25 @@ async function seedLocations () {
   try {
     console.log('🌐 Connecting to database...')
 
-    const { data: pkgData } = await axios.get(
-      `https://ckan0.cf.opendata.inter.prod-toronto.ca/api/3/action/package_show?id=${PACKAGE_ID}`
-    )
+    const allRecords = await fetchAllRecords(RESOURCE_ID)
 
-    const resources = pkgData.result.resources.filter(r => r.datastore_active)
-    if (!resources.length)
-      throw new Error('No active datastore resources found')
+    const dates = allRecords
+  .map(r => r.created_at)
+  .filter(Boolean)
 
-    const resourceId = resources[0].id
-    const allRecords = await fetchAllRecords(resourceId)
+console.log(`📦 Total fetched: ${allRecords.length}`)
+
+// Optional sanity check if you ever add OCCUPANCY_DATE here
+if (allRecords[0]?.sector) {
+  console.log('🧠 Sample sector value:', allRecords[0].sector)
+}
 
     console.log(`📦 Total fetched: ${allRecords.length}`)
     const locations = allRecords
     console.log(`✅ Locations ready to insert: ${locations.length}`)
+
+    console.log(`🚀 Inserting ${locations.length} locations into database...`)
+    
 
     await insertLocations(client, locations)
 
