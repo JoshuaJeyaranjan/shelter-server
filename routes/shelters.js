@@ -1,6 +1,7 @@
-const express = require("express");
+import express from "express";
+import * as locationsController from "../controllers/locationsController.js";
+
 const router = express.Router();
-const locationsController = require("../controllers/locationsController");
 
 // Return all locations, optionally filtered by query params
 router.get("/", locationsController.getAllLocations);
@@ -14,4 +15,4 @@ router.get("/:id/occupancy", locationsController.getLocationOccupancy);
 // Route for a single location's full info
 router.get("/:id", locationsController.getLocationById);
 
-module.exports = router;
+export default router;
