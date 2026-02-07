@@ -1,7 +1,7 @@
 import "dotenv/config";
 
 const { seedLocations } = require("../utils/seedLocations");
-const { seedPrograms } = require("../utils/seedPrograms");
+const { seedProgramsAPI } = require("../utils/seedPrograms");
 
 async function runJob() {
   console.log("🌐 Starting CKAN shelter refresh job...");
@@ -18,7 +18,7 @@ async function runJob() {
 
   try {
     console.log("🛏️ Refreshing program occupancy from CKAN...");
-    await seedPrograms();
+    await seedProgramsAPI();
     console.log("✅ Programs refreshed successfully");
   } catch (err) {
     failed = true;

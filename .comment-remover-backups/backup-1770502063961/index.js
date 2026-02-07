@@ -3,6 +3,7 @@ import express from "express";
 import cors from "cors";
 import morgan from "morgan";
 
+import pool from "./config/db.js";
 import shelterRoutes from "./routes/locations.js";
 
 const app = express();
