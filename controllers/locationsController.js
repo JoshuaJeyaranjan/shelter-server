@@ -1,13 +1,11 @@
 const pool = require("../config/db");
 
-// GET /api/locations
 exports.getAllLocations = async (req, res, next) => {
   try {
     const { sector, city, minVacancyBeds, minVacancyRooms } = req.query;
 
-    // Fetch locations
-const locationsResult = await pool.query(
-  `
+    const locationsResult = await pool.query(
+      `
   SELECT
     id,
     location_name,
@@ -23,18 +21,17 @@ const locationsResult = await pool.query(
   WHERE address IS NOT NULL
   ${city ? "AND city = $1" : ""}
   `,
-  city ? [city] : []
-);
+      city ? [city] : [],
+    );
     const locations = locationsResult.rows;
 
     if (!locations.length) return res.json({ locations: [] });
 
-    // Fetch all programs for these locations
     const locationIds = locations.map((l) => l.id);
-    let programQuery = "SELECT * FROM programs WHERE location_id = ANY($1::int[])";
+    let programQuery =
+      "SELECT * FROM programs WHERE location_id = ANY($1::int[])";
     const programParams = [locationIds];
 
-    // Optional filters
     const programConditions = [];
     if (sector) {
       programParams.push(sector);
@@ -43,13 +40,13 @@ const locationsResult = await pool.query(
     if (minVacancyBeds) {
       programParams.push(Number(minVacancyBeds));
       programConditions.push(
-        `(capacity_actual_bed - COALESCE(occupied_beds,0)) >= $${programParams.length}`
+        `(capacity_actual_bed - COALESCE(occupied_beds,0)) >= $${programParams.length}`,
       );
     }
     if (minVacancyRooms) {
       programParams.push(Number(minVacancyRooms));
       programConditions.push(
-        `(capacity_actual_room - COALESCE(occupied_rooms,0)) >= $${programParams.length}`
+        `(capacity_actual_room - COALESCE(occupied_rooms,0)) >= $${programParams.length}`,
       );
     }
 
@@ -60,13 +57,12 @@ const locationsResult = await pool.query(
     const programsResult = await pool.query(programQuery, programParams);
     const programs = programsResult.rows;
 
-    // Map programs to locations
     const locationsWithPrograms = locations
       .map((loc) => ({
         ...loc,
         programs: programs.filter((p) => p.location_id === loc.id),
       }))
-      .filter((loc) => loc.programs.length > 0); // remove locations with no programs
+      .filter((loc) => loc.programs.length > 0);
 
     res.json({ locations: locationsWithPrograms });
   } catch (err) {
@@ -74,14 +70,13 @@ const locationsResult = await pool.query(
   }
 };
 
-// GET /api/locations/:id
 exports.getLocationById = async (req, res, next) => {
   try {
     const { id } = req.params;
 
     const locationResult = await pool.query(
       "SELECT * FROM locations WHERE id = $1 AND address IS NOT NULL",
-      [id]
+      [id],
     );
     if (!locationResult.rows.length)
       return res.status(404).json({ message: "Location not found" });
@@ -90,23 +85,21 @@ exports.getLocationById = async (req, res, next) => {
 
     const programsResult = await pool.query(
       "SELECT * FROM programs WHERE location_id = $1",
-      [id]
+      [id],
     );
-
     res.json({ ...location, programs: programsResult.rows });
   } catch (err) {
     next(err);
   }
 };
 
-// GET /api/locations/:id/occupancy
 exports.getLocationOccupancy = async (req, res, next) => {
   try {
     const { id } = req.params;
 
     const locationResult = await pool.query(
       "SELECT * FROM locations WHERE id = $1",
-      [id]
+      [id],
     );
     if (!locationResult.rows.length)
       return res.status(404).json({ message: "Location not found" });
@@ -114,7 +107,7 @@ exports.getLocationOccupancy = async (req, res, next) => {
 
     const programsResult = await pool.query(
       "SELECT * FROM programs WHERE location_id = $1",
-      [id]
+      [id],
     );
 
     const programs = programsResult.rows.map((p) => ({
@@ -146,8 +139,6 @@ exports.getLocationOccupancy = async (req, res, next) => {
     next(err);
   }
 };
-
-// GET /api/locations/map
 exports.getLocationsForMap = async (req, res, next) => {
   try {
     // 1️⃣ Fetch all locations with their lat/lng and address info
@@ -169,7 +160,6 @@ exports.getLocationsForMap = async (req, res, next) => {
 
     const locations = locationsResult.rows;
 
-    // 2️⃣ Fetch all programs
     const programsResult = await pool.query(`
       SELECT
         id,
@@ -186,19 +176,17 @@ exports.getLocationsForMap = async (req, res, next) => {
 
     const programs = programsResult.rows;
 
-    // 3️⃣ Merge programs into their corresponding locations
     const locationsWithPrograms = locations.map((loc) => ({
       ...loc,
       programs: programs.filter((p) => p.location_id === loc.id),
     }));
 
-    // 4️⃣ Optional: filter out any locations that somehow have no lat/lng
     const validLocations = locationsWithPrograms.filter(
       (loc) =>
         loc.latitude !== null &&
         loc.latitude !== undefined &&
         loc.longitude !== null &&
-        loc.longitude !== undefined
+        loc.longitude !== undefined,
     );
 
     res.json(validLocations);

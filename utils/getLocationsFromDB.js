@@ -1,5 +1,5 @@
-require('dotenv').config();
-const pool = require('../config/db');
+require("dotenv").config();
+const pool = require("../config/db");
 
 /**
  * Fetch all locations from the database and return a Map keyed by:
@@ -16,14 +16,14 @@ async function getLocationsFromDB() {
 
     res.rows.forEach((row) => {
       if (!row.location_name || !row.address) return;
-      const key = `${row.location_name}||${row.address}||${row.city || ''}||${row.province || ''}`;
+      const key = `${row.location_name}||${row.address}||${row.city || ""}||${row.province || ""}`;
       idMap.set(key, row.id);
     });
 
     console.log(`✅ Fetched ${idMap.size} locations from DB.`);
     return idMap;
   } catch (err) {
-    console.error('❌ Error fetching locations from DB:', err);
+    console.error("❌ Error fetching locations from DB:", err);
     return idMap;
   }
 }
