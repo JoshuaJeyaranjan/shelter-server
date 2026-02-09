@@ -1,7 +1,6 @@
-import "dotenv/config";
 
-const { seedLocations } = require("../utils/seedLocations");
-const { seedPrograms } = require("../utils/seedPrograms");
+import { seedLocations } from '../utils/seedLocations.js';
+import { seedPrograms } from '../utils/seedPrograms.js';
 
 async function runJob() {
   console.log("🌐 Starting CKAN shelter refresh job...");

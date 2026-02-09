@@ -1,6 +1,6 @@
 import "dotenv/config";
 import axios from "axios";
-import pool from "../config/db";
+import pool from "../config/db.js";
 
 const CKAN_URL = process.env.CKAN_URL;
 const RESOURCE_ID = process.env.RESOURCE_ID;
@@ -175,7 +175,7 @@ async function insertPrograms(client, locations) {
   console.log(`  Programs skipped: ${totalSkipped}`);
 }
 
-async function seedPrograms() {
+export async function seedPrograms() {
   const client = await pool.connect();
   try {
     console.log("🌐 Fetching programs from CKAN...");
@@ -205,9 +205,3 @@ async function seedPrograms() {
     client.release();
   }
 }
-
-if (require.main === module) {
-  seedPrograms().catch(console.error);
-}
-
-module.exports = { seedPrograms };

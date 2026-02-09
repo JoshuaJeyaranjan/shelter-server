@@ -1,6 +1,6 @@
 import "dotenv/config";
 import axios from "axios";
-import pool from "../config/db";
+import pool from "../config/db.js";
 
 const CKAN_URL = process.env.CKAN_URL;
 const RESOURCE_ID = process.env.RESOURCE_ID;
@@ -140,7 +140,7 @@ async function insertLocations(client, locations) {
   }
 }
 
-async function seedLocations() {
+export async function seedLocations() {
   const client = await pool.connect();
   try {
     console.log("🌐 Connecting to database...");
@@ -158,8 +158,4 @@ async function seedLocations() {
   }
 }
 
-if (require.main === module) {
-  seedLocations().catch(console.error);
-}
 
-module.exports = { seedLocations };

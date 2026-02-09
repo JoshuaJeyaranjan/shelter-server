@@ -78,10 +78,7 @@ CREATE TABLE programs (
   UNIQUE(location_id, program_name)
 );
 
-
 Adjust types/constraints as needed for your environment.
-
-
 
 ```bash
 
@@ -114,7 +111,6 @@ You can run each seed script directly:
 node utils/seedLocations.js
 node utils/seedPrograms.js
 ```
-
 Notes:
 
 - The CKAN resource id used by the scripts is defined within each `utils/*` file. The code paginates the datastore and attempts to upsert all records.
